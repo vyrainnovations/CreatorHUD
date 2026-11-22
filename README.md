@@ -68,7 +68,7 @@ Right-click the tray icon for:
 - **Open island** (or press **Ctrl+Alt+Space** anywhere)
 - **Clipboard history**, **Notification pop-ups**, **Frosted glass**, **Caps Lock pop-up**
 - **Show in screenshots and recordings**
-- **Compatibility mode (applies after restart).** This switches to the older window type, in case the island ever misbehaves on your PC.
+- **Blender render progress.** Turns the render bubble on or off. When it's off, CreatorHUD stops watching for renders completely.
 - **Start when I sign in**, **Settings...**, **Open data folder**, **Quit**, **Remove**
 
 The clipboard list opens with **Win+Shift+V**, or **Ctrl+Alt+Shift+V** if Windows already uses that.
@@ -78,7 +78,7 @@ The clipboard list opens with **Win+Shift+V**, or **Ctrl+Alt+Shift+V** if Window
 ## Privacy
 
 - CreatorHUD has **no network code**. It never connects to the internet.
-- Clipboard history and the shelf stay on your PC, in `%LOCALAPPDATA%\WinUltra`. Copies from password managers are skipped.
+- Clipboard history and the shelf stay on your PC, in `%LOCALAPPDATA%\WinUltra`. Your recent copies (last 30) and pinned items survive restarts, and each save keeps a backup copy so nothing is lost if the PC shuts off mid-save. Copies from password managers are skipped.
 - For the glass look it reads the small strip of screen directly behind the island, in memory only. Nothing is saved or sent anywhere.
 - It doesn't read your keyboard.
 

@@ -69,7 +69,7 @@ namespace WinUltra
     // The setup window: what WinUltra does, and a switch for each part.
     class SetupForm : Form
     {
-        readonly CheckBox startup, desktop, clipboard, notes, glass, caps, record;
+        readonly CheckBox startup, desktop, clipboard, notes, glass, caps, record, blender;
 
         public SetupForm(Options o, bool firstRun)
         {
@@ -109,6 +109,9 @@ namespace WinUltra
             notes = Box("Notification pop-ups", "Shows your Windows notifications in the island.", o.Notifications, flow);
             glass = Box("Frosted glass", "Blurs the bit of screen behind the island so it looks like glass. Nothing is saved.", o.FrostedGlass, flow);
             caps = Box("Caps Lock pop-up", "Shows when Caps Lock turns on or off.", o.CapsLock, flow);
+
+            blender = Box("Blender render progress", "While Blender renders, a small bubble beside the island shows how far it has got. "
+                + "Needs the CreatorHUD Bridge add-on in Blender.", o.BlenderRing, flow);
 
             flow.Controls.Add(Heading("Screen recording"));
             record = Box("Show in screenshots and screen recordings",
@@ -159,6 +162,7 @@ namespace WinUltra
                 o.FrostedGlass = f.glass.Checked;
                 o.CapsLock = f.caps.Checked;
                 o.Recordable = f.record.Checked;
+                o.BlenderRing = f.blender.Checked;
                 o.SetupDone = true;
                 o.Save();
                 App.SetStartup(f.startup.Checked);

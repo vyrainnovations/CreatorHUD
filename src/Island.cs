@@ -880,7 +880,7 @@ class Sensors
 
 // ---------------------------------------------------------------- Saved data
 
-public class SavedClip { public string Kind { get; set; } public string Text { get; set; } public string File { get; set; } }
+public class SavedClip { public string Kind { get; set; } public string Text { get; set; } public string File { get; set; } public bool? Pinned { get; set; } }
 public class SavedShelfItem { public string Path { get; set; } public bool Pinned { get; set; } }
 
 class Clip
@@ -912,6 +912,9 @@ static class Store
     {
         try { if (File.Exists(file)) return new JavaScriptSerializer().Deserialize<T>(File.ReadAllText(file, Encoding.UTF8)); }
         catch (Exception) { }
+        // The main file is missing or damaged: fall back to the copy kept by the last save.
+        try { if (File.Exists(file + ".bak")) return new JavaScriptSerializer().Deserialize<T>(File.ReadAllText(file + ".bak", Encoding.UTF8)); }
+        catch (Exception) { }
         return null;
     }
 
@@ -922,8 +925,10 @@ static class Store
             Directory.CreateDirectory(Dir);
             string tmp = file + ".tmp";
             File.WriteAllText(tmp, new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.Serialize(value), Encoding.UTF8);
-            if (File.Exists(file)) File.Delete(file);
-            File.Move(tmp, file);
+            // CreatorHUD: swap the new file in one step, keeping the previous one as .bak, so a crash or
+            // power cut mid-save can never leave you with nothing.
+            if (File.Exists(file)) File.Replace(tmp, file, file + ".bak", true);
+            else File.Move(tmp, file);
         }
         catch (Exception) { }
     }
@@ -1558,7 +1563,7 @@ class Island : Window
         // CreatorHUD: by default a direct window. Windows draws it straight from the GPU with true
         // see-through areas (DWM frame extended over the whole window), and a window region limits
         // where it takes clicks. The classic layered window is kept as a fallback.
-        direct = !WinUltra.App.Options.ClassicWindow;
+        direct = WinUltra.App.Options.DirectWindow;
         AllowsTransparency = !direct;
         Background = Brushes.Transparent;
         Topmost = true;
@@ -2053,6 +2058,19 @@ class Island : Window
         UpdateGlassRate();
     }
 
+    // Turns the Blender render bubble on or off (Settings or the tray).
+    public void SetBlender(bool on)
+    {
+        if (renderWatch == null) return;
+        if (on) { renderWatch.Start(); return; }
+        renderWatch.Stop();
+        render = new RenderStatus();
+        renderEndedAt = DateTime.MinValue;
+        UpdateRing();
+        UpdateCollapsed();
+        if (mode == Mode.Collapsed) ApplyCollapsed(true); else SyncBubble();
+    }
+
     void OnRender(RenderStatus s)
     {
         bool was = render.Rendering;
@@ -2285,7 +2303,7 @@ class Island : Window
         Perf.Start();
         renderWatch = new RenderWatch(WinUltra.App.DataDir);
         renderWatch.Changed += OnRender;
-        renderWatch.Start();
+        if (WinUltra.App.Options.BlenderRing) renderWatch.Start();
         Later(8000, delegate { if (mode != Mode.Expanded) Native.TrimMemory(); });
     }
 
@@ -2299,7 +2317,7 @@ class Island : Window
     public void SetClipboardHistory(bool on)
     {
         if (on) Native.AddClipboardFormatListener(hwnd);
-        else { Native.RemoveClipboardFormatListener(hwnd); clips.RemoveAll(c => !c.Pinned); RenderClips(); }
+        else { Native.RemoveClipboardFormatListener(hwnd); ClearUnpinned(); }
     }
 
     public void SetNotifications(bool on)
@@ -2347,6 +2365,7 @@ class Island : Window
 
     void Cleanup()
     {
+        try { if (clipSaveTimer != null && clipSaveTimer.IsEnabled) SaveClips(); } catch (Exception) { }    // a pending save, before quitting
         try
         {
             Native.UnregisterHotKey(hwnd, 1);
@@ -4068,7 +4087,7 @@ class Island : Window
         head.Children.Add(UI.At(clipCount, 1));
         var clear = UI.Text("Clear unpinned", 12, UI.Fg, FontWeights.SemiBold);
         clear.Margin = new Thickness(10, 0, 10, 0);
-        head.Children.Add(UI.At(UI.Button(clear, 0, 26, 13, UI.Card, delegate { clips.RemoveAll(c => !c.Pinned); RenderClips(); }), 2));
+        head.Children.Add(UI.At(UI.Button(clear, 0, 26, 13, UI.Card, delegate { ClearUnpinned(); }), 2));
         page.Children.Add(UI.Row(head, 0));
         clipList = new StackPanel();
         page.Children.Add(UI.Row(new ScrollViewer { Content = clipList, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden, PanningMode = PanningMode.VerticalOnly }, 1));
@@ -4168,8 +4187,10 @@ class Island : Window
         {
             int i = clips.FindLastIndex(c => !c.Pinned);
             if (i < 0) break;
+            DeleteClipFile(clips[i]);
             clips.RemoveAt(i);
         }
+        ClipsChanged();
         if (mode == Mode.Expanded && tab == TabClipboard) RenderClips();
     }
 
@@ -4273,7 +4294,6 @@ class Island : Window
             }
             catch (Exception) { clip.File = null; }
         }
-        if (!clip.Pinned) DeleteClipFile(clip);
         SaveClips();
         RenderClips();
     }
@@ -4281,7 +4301,25 @@ class Island : Window
     void RemoveClip(Clip clip)
     {
         clips.Remove(clip);
-        if (clip.Pinned) { DeleteClipFile(clip); SaveClips(); }
+        DeleteClipFile(clip);
+        SaveClips();
+        RenderClips();
+    }
+
+    // New copies are saved a moment later, in one go, rather than on every single copy.
+    DispatcherTimer clipSaveTimer;
+    void ClipsChanged()
+    {
+        if (clipSaveTimer == null) clipSaveTimer = MakeTimer(1500, delegate { SaveClips(); });
+        clipSaveTimer.Stop();
+        clipSaveTimer.Start();
+    }
+
+    void ClearUnpinned()
+    {
+        foreach (var c in clips.Where(c => !c.Pinned).ToList()) DeleteClipFile(c);
+        clips.RemoveAll(c => !c.Pinned);
+        SaveClips();
         RenderClips();
     }
 
@@ -4292,9 +4330,23 @@ class Island : Window
         clip.File = null;
     }
 
+    // CreatorHUD: the whole list is saved, recent copies as well as pinned ones, so nothing vanishes on a
+    // restart. Images are kept as files in the data folder.
     void SaveClips()
     {
-        var list = clips.Where(c => c.Pinned).Select(c => new SavedClip { Kind = c.IsImage ? "image" : "text", Text = c.IsImage ? null : c.Text, File = c.File }).ToList();
+        if (clipSaveTimer != null) clipSaveTimer.Stop();
+        foreach (var c in clips)
+            if (c.IsImage && c.File == null && c.Png != null)
+            {
+                try
+                {
+                    Directory.CreateDirectory(Store.ImageDir);
+                    c.File = Guid.NewGuid().ToString("N") + ".png";
+                    File.WriteAllBytes(System.IO.Path.Combine(Store.ImageDir, c.File), c.Png);
+                }
+                catch (Exception) { c.File = null; }
+            }
+        var list = clips.Where(c => !c.IsImage || c.File != null).Select(c => new SavedClip { Kind = c.IsImage ? "image" : "text", Text = c.IsImage ? null : c.Text, File = c.File, Pinned = c.Pinned }).ToList();
         Store.Save(Store.ClipsFile, list);
     }
 
@@ -4311,11 +4363,11 @@ class Island : Window
                     var png = File.ReadAllBytes(System.IO.Path.Combine(Store.ImageDir, s.File));
                     string hash;
                     using (var md5 = MD5.Create()) hash = Convert.ToBase64String(md5.ComputeHash(png));
-                    clips.Add(new Clip { IsImage = true, Png = png, Hash = hash, Thumb = Thumbnail(png), Pinned = true, File = s.File });
+                    clips.Add(new Clip { IsImage = true, Png = png, Hash = hash, Thumb = Thumbnail(png), Pinned = s.Pinned ?? true, File = s.File });
                 }
                 catch (Exception) { }
             }
-            else if (!string.IsNullOrEmpty(s.Text)) clips.Add(new Clip { Text = s.Text, Pinned = true });
+            else if (!string.IsNullOrEmpty(s.Text)) clips.Add(new Clip { Text = s.Text, Pinned = s.Pinned ?? true });
         }
     }
 

@@ -44,9 +44,11 @@ namespace WinUltra
 #endif
         // CreatorHUD: off by default, so the live glass can see past the island.
         public bool Recordable;
-        // CreatorHUD: the older see-through window type (copied back from the GPU every frame). Only as
-        // a fallback if the direct window misbehaves on some PC; takes effect after a restart.
-        public bool ClassicWindow;
+        // CreatorHUD: the experimental direct window (drawn by Windows straight from the GPU). Off by
+        // default: it can show stale frames while the island resizes. Only via settings.txt (directwindow=1).
+        public bool DirectWindow;
+        // CreatorHUD: the Blender render bubble.
+        public bool BlenderRing = true;
 
         static string FilePath { get { return Path.Combine(App.DataDir, "settings.txt"); } }
 
@@ -62,7 +64,8 @@ namespace WinUltra
                     bool on = parts[1].Trim() == "1";
                     if (parts[0] == "shortcuts") o.ShortcutsMade = on;
                     if (parts[0] == "recordable") o.Recordable = on;
-                    if (parts[0] == "classicwindow") o.ClassicWindow = on;
+                    if (parts[0] == "directwindow") o.DirectWindow = on;
+                    if (parts[0] == "blender") o.BlenderRing = on;
 #if FRIENDS
                     if (parts[0] == "clipboard") o.ClipboardHistory = on;
                     if (parts[0] == "notifications") o.Notifications = on;
@@ -83,7 +86,7 @@ namespace WinUltra
                 Directory.CreateDirectory(App.DataDir);
 #if FRIENDS
                 File.WriteAllLines(FilePath, new[] { "clipboard=" + (ClipboardHistory ? 1 : 0), "notifications=" + (Notifications ? 1 : 0),
-                    "glass=" + (FrostedGlass ? 1 : 0), "capslock=" + (CapsLock ? 1 : 0), "setup=" + (SetupDone ? 1 : 0), "recordable=" + (Recordable ? 1 : 0), "classicwindow=" + (ClassicWindow ? 1 : 0) });
+                    "glass=" + (FrostedGlass ? 1 : 0), "capslock=" + (CapsLock ? 1 : 0), "setup=" + (SetupDone ? 1 : 0), "recordable=" + (Recordable ? 1 : 0), "directwindow=" + (DirectWindow ? 1 : 0), "blender=" + (BlenderRing ? 1 : 0) });
 #else
                 File.WriteAllLines(FilePath, new[] { "shortcuts=" + (ShortcutsMade ? 1 : 0) });
 #endif
@@ -235,17 +238,19 @@ namespace WinUltra
         public static void SetFrostedGlass(bool on) { Options.FrostedGlass = on; Options.Save(); OnIsland(delegate { island.SetFrostedGlass(on); }); }
         public static void SetCapsLock(bool on) { Options.CapsLock = on; Options.Save(); OnIsland(delegate { island.SetCapsLockPopup(on); }); }
         public static void SetRecordable(bool on) { Options.Recordable = on; Options.Save(); OnIsland(delegate { island.SetRecordable(on); }); }
+        public static void SetBlender(bool on) { Options.BlenderRing = on; Options.Save(); OnIsland(delegate { island.SetBlender(on); }); }
 
         // The settings window again, from the tray. Applies whatever changed.
         public static void ShowSettings()
         {
-            var before = new[] { Options.ClipboardHistory, Options.Notifications, Options.FrostedGlass, Options.CapsLock, Options.Recordable };
+            var before = new[] { Options.ClipboardHistory, Options.Notifications, Options.FrostedGlass, Options.CapsLock, Options.Recordable, Options.BlenderRing };
             if (!SetupForm.Run(Options, false)) return;
             if (before[0] != Options.ClipboardHistory) SetClipboardHistory(Options.ClipboardHistory);
             if (before[1] != Options.Notifications) SetNotifications(Options.Notifications);
             if (before[2] != Options.FrostedGlass) SetFrostedGlass(Options.FrostedGlass);
             if (before[3] != Options.CapsLock) SetCapsLock(Options.CapsLock);
             if (before[4] != Options.Recordable) SetRecordable(Options.Recordable);
+            if (before[5] != Options.BlenderRing) SetBlender(Options.BlenderRing);
         }
 
         public static void OpenDataFolder()
@@ -426,11 +431,7 @@ namespace WinUltra
             var glass = new System.Windows.Forms.ToolStripMenuItem("Frosted glass", null, delegate { App.SetFrostedGlass(!App.Options.FrostedGlass); });
             var caps = new System.Windows.Forms.ToolStripMenuItem("Caps Lock pop-up", null, delegate { App.SetCapsLock(!App.Options.CapsLock); });
             var rec = new System.Windows.Forms.ToolStripMenuItem("Show in screenshots and recordings", null, delegate { App.SetRecordable(!App.Options.Recordable); });
-            var classic = new System.Windows.Forms.ToolStripMenuItem("Compatibility mode (applies after restart)", null, delegate
-            {
-                App.Options.ClassicWindow = !App.Options.ClassicWindow;
-                App.Options.Save();
-            });
+            var blender = new System.Windows.Forms.ToolStripMenuItem("Blender render progress", null, delegate { App.SetBlender(!App.Options.BlenderRing); });
             var startup = new System.Windows.Forms.ToolStripMenuItem("Start when I sign in", null, delegate { App.SetStartup(!App.StartsWithWindows); });
             menu.Items.Add(open);
             menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
@@ -439,7 +440,7 @@ namespace WinUltra
             menu.Items.Add(glass);
             menu.Items.Add(caps);
             menu.Items.Add(rec);
-            menu.Items.Add(classic);
+            menu.Items.Add(blender);
             menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
             menu.Items.Add(startup);
             menu.Items.Add("Settings...", null, delegate { App.ShowSettings(); });
@@ -454,7 +455,7 @@ namespace WinUltra
                 glass.Checked = App.Options.FrostedGlass;
                 caps.Checked = App.Options.CapsLock;
                 rec.Checked = App.Options.Recordable;
-                classic.Checked = App.Options.ClassicWindow;
+                blender.Checked = App.Options.BlenderRing;
                 startup.Checked = App.StartsWithWindows;
             };
             icon.ContextMenuStrip = menu;

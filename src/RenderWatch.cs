@@ -37,6 +37,8 @@ class RenderWatch
         timer.Tick += delegate { Check(); };
     }
 
+    public void Stop() { timer.Stop(); }
+
     public void Start()
     {
         // A file left over from a render that ended while the island was not running is not news.
