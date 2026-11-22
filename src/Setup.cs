@@ -69,11 +69,11 @@ namespace WinUltra
     // The setup window: what WinUltra does, and a switch for each part.
     class SetupForm : Form
     {
-        readonly CheckBox startup, desktop, clipboard, notes, glass, caps;
+        readonly CheckBox startup, desktop, clipboard, notes, glass, caps, record;
 
         public SetupForm(Options o, bool firstRun)
         {
-            Text = firstRun ? "Welcome to WinUltra" : "WinUltra settings";
+            Text = firstRun ? "Welcome to CreatorHUD" : "CreatorHUD settings";
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -92,12 +92,12 @@ namespace WinUltra
             var flow = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Padding = new Padding(18, 14, 18, 10) };
             Controls.Add(flow);
 
-            flow.Controls.Add(new Label { Text = firstRun ? "Welcome to WinUltra" : "WinUltra settings", Font = new Font("Segoe UI Semibold", 14f), AutoSize = true, Margin = new Padding(0, 0, 0, 6) });
+            flow.Controls.Add(new Label { Text = firstRun ? "Welcome to CreatorHUD" : "CreatorHUD settings", Font = new Font("Segoe UI Semibold", 14f), AutoSize = true, Margin = new Padding(0, 0, 0, 6) });
             flow.Controls.Add(Note("A Dynamic Island at the top of your screen with handy pop-ups. "
-                + "Everything stays on this PC: WinUltra never connects to the internet."));
+                + "Everything stays on this PC: CreatorHUD never connects to the internet."));
 
             flow.Controls.Add(Heading("Starting up"));
-            startup = Box("Start WinUltra when I sign in", "Adds a shortcut to your Start-up folder.", App.StartsWithWindows || firstRun, flow);
+            startup = Box("Start CreatorHUD when I sign in", "Adds a shortcut to your Start-up folder.", App.StartsWithWindows || firstRun, flow);
             desktop = Box("Put a shortcut on my desktop", null, File.Exists(Shortcut.DesktopLink) || firstRun, flow);
             string folder = Path.GetDirectoryName(App.ExePath).ToLowerInvariant();
             if (folder.Contains(@"\downloads") || folder.Contains(@"\temp"))
@@ -110,8 +110,13 @@ namespace WinUltra
             glass = Box("Frosted glass", "Blurs the bit of screen behind the island so it looks like glass. Nothing is saved.", o.FrostedGlass, flow);
             caps = Box("Caps Lock pop-up", "Shows when Caps Lock turns on or off.", o.CapsLock, flow);
 
+            flow.Controls.Add(Heading("Screen recording"));
+            record = Box("Show in screenshots and screen recordings",
+                "Off: the island is hidden from recordings, so notifications never end up in your videos. "
+                + "On: it shows up in your videos, live glass and all.", o.Recordable, flow);
+
             var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Anchor = AnchorStyles.Right, Margin = new Padding(0, 12, 0, 0) };
-            var ok = new Button { Text = firstRun ? "Start WinUltra" : "Save", DialogResult = DialogResult.OK, AutoSize = true, Padding = new Padding(10, 2, 10, 2) };
+            var ok = new Button { Text = firstRun ? "Start CreatorHUD" : "Save", DialogResult = DialogResult.OK, AutoSize = true, Padding = new Padding(10, 2, 10, 2) };
             var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true, Padding = new Padding(10, 2, 10, 2) };
             buttons.Controls.Add(ok);
             buttons.Controls.Add(cancel);
@@ -153,6 +158,7 @@ namespace WinUltra
                 o.Notifications = f.notes.Checked;
                 o.FrostedGlass = f.glass.Checked;
                 o.CapsLock = f.caps.Checked;
+                o.Recordable = f.record.Checked;
                 o.SetupDone = true;
                 o.Save();
                 App.SetStartup(f.startup.Checked);

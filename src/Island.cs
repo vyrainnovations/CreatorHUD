@@ -106,9 +106,11 @@ static class Native
 
     public static void TrimMemory()
     {
+        // CreatorHUD: collect garbage, but no longer hand the working set back to Windows. That made the
+        // first open after a quiet spell page everything back in and stutter; Windows still trims us by
+        // itself if it ever needs the memory.
         GC.Collect();
         GC.WaitForPendingFinalizers();
-        EmptyWorkingSet(GetCurrentProcess());
     }
 
     // 48 px shell icons ("extra large" image list), so files on the shelf stay sharp at 125%.
@@ -939,7 +941,29 @@ static class UI
 {
     public static readonly FontFamily TextFont = new FontFamily("Segoe UI Variable Text, Segoe UI");
     public static readonly FontFamily IconFont = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets");
-    public static readonly Brush Fg = B("#F5F5F7"), Dim = B("#9A9AA6"), Card = B("#14FFFFFF"), Rim = B("#1CFFFFFF"), Panel_ = B("#2A2A33"),
+    // CreatorHUD: cards are little panes of the same glass, a lighter top fading down, with a dim
+    // specular edge like the island's own rim.
+    public static readonly Brush Card = Pane(0x1E, 0x0A), CardHover = Pane(0x2C, 0x12), CardOn = Pane(0x36, 0x1A), Rim = Edge(0x58, 0x10, 0x30);
+
+    static Brush Pane(byte top, byte bottom)
+    {
+        var b = new LinearGradientBrush(Color.FromArgb(top, 255, 255, 255), Color.FromArgb(bottom, 255, 255, 255), 90);
+        b.Freeze();
+        return b;
+    }
+
+    static Brush Edge(byte lit, byte mid, byte end)
+    {
+        var b = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+        b.GradientStops.Add(new GradientStop(Color.FromArgb(lit, 255, 255, 255), 0));
+        b.GradientStops.Add(new GradientStop(Color.FromArgb(mid, 255, 255, 255), 0.45));
+        b.GradientStops.Add(new GradientStop(Color.FromArgb(mid, 255, 255, 255), 0.7));
+        b.GradientStops.Add(new GradientStop(Color.FromArgb(end, 255, 255, 255), 1));
+        b.Freeze();
+        return b;
+    }
+
+    public static readonly Brush Fg = B("#F5F5F7"), Dim = B("#9A9AA6"), Panel_ = B("#22FFFFFF"),
         Selected = B("#30FFFFFF"), Blue = B("#3D7BFF"), Orange = B("#FF9F0A"), Green = B("#30D158"), Red = B("#FF453A"), Purple = B("#9F7BFF");
 
     static void Spring(ScaleTransform s, double to, double ms)
@@ -1052,8 +1076,8 @@ static class UI
         var scale = new ScaleTransform(1, 1);
         b.RenderTransform = scale;
         b.RenderTransformOrigin = new Point(0.5, 0.5);
-        b.MouseEnter += delegate { b.Opacity = 0.8; };
-        b.MouseLeave += delegate { b.Opacity = 1; if (pressed) Spring(scale, 1, 420); pressed = false; };
+        b.MouseEnter += delegate { if (b.Background == Card) b.Background = CardHover; else if (b.Background != CardOn) b.Opacity = 0.8; };
+        b.MouseLeave += delegate { if (b.Background == CardHover) b.Background = Card; b.Opacity = 1; if (pressed) Spring(scale, 1, 420); pressed = false; };
         b.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e) { pressed = true; e.Handled = true; Spring(scale, 0.94, 260); };
         b.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs e)
         {
@@ -1064,6 +1088,46 @@ static class UI
             if (click != null) click();
         };
         return b;
+    }
+
+    // CreatorHUD: a coloured button made of tinted glass: a see-through wash of the colour, lighter at the
+    // top, a soft sheen across the top and a bright edge in the same tint. Brightens under the mouse.
+    public static Border TintButton(UIElement child, double width, double height, double radius, Color c, Action click)
+    {
+        Func<byte, byte, Brush> wash = (top, bottom) =>
+        {
+            var b = new LinearGradientBrush(
+                Color.FromArgb(top, (byte)(c.R + (255 - c.R) * 0.25), (byte)(c.G + (255 - c.G) * 0.25), (byte)(c.B + (255 - c.B) * 0.25)),
+                Color.FromArgb(bottom, c.R, c.G, c.B), 90);
+            b.Freeze();
+            return b;
+        };
+        Brush rest = wash(0x9A, 0x58), hover = wash(0xC4, 0x7C);
+        var edge = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+        edge.GradientStops.Add(new GradientStop(Color.FromArgb(0xE0, (byte)(c.R + (255 - c.R) * 0.6), (byte)(c.G + (255 - c.G) * 0.6), (byte)(c.B + (255 - c.B) * 0.6)), 0));
+        edge.GradientStops.Add(new GradientStop(Color.FromArgb(0x40, c.R, c.G, c.B), 0.5));
+        edge.GradientStops.Add(new GradientStop(Color.FromArgb(0x90, (byte)(c.R + (255 - c.R) * 0.4), (byte)(c.G + (255 - c.G) * 0.4), (byte)(c.B + (255 - c.B) * 0.4)), 1));
+        edge.Freeze();
+        var sheen = new Border
+        {
+            VerticalAlignment = VerticalAlignment.Top, Height = Math.Max(6, height * 0.42), Margin = new Thickness(radius * 0.45, 1.5, radius * 0.45, 0),
+            CornerRadius = new CornerRadius(radius * 0.6), IsHitTestVisible = false,
+            Background = new LinearGradientBrush(Color.FromArgb(0x5C, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90),
+        };
+        var halo = new RadialGradientBrush();
+        halo.GradientStops.Add(new GradientStop(Color.FromArgb(0x30, c.R, c.G, c.B), 0.5));
+        halo.GradientStops.Add(new GradientStop(Color.FromArgb(0, c.R, c.G, c.B), 1));
+        halo.Freeze();
+        var g = new Grid();
+        g.Children.Add(new Border { Margin = new Thickness(-9), CornerRadius = new CornerRadius(radius + 9), Background = halo, IsHitTestVisible = false });
+        g.Children.Add(sheen);
+        g.Children.Add(child);
+        var btn = Button(g, width, height, radius, rest, click);
+        btn.BorderBrush = edge;
+        btn.BorderThickness = new Thickness(1);
+        btn.MouseEnter += delegate { btn.Opacity = 1; btn.Background = hover; };
+        btn.MouseLeave += delegate { btn.Background = rest; };
+        return btn;
     }
 
     public static Border Panel(UIElement child, Thickness padding)
@@ -1109,6 +1173,7 @@ class BarSlider : Grid
         MouseMove += delegate(object s, MouseEventArgs e) { if (IsMouseCaptured) FromMouse(e); };
         MouseLeftButtonUp += delegate { ReleaseMouseCapture(); };
         MouseWheel += delegate(object s, MouseWheelEventArgs e) { Set(value + (e.Delta > 0 ? 0.02 : -0.02)); e.Handled = true; };
+        new Jelly(this, false);
     }
 
     public bool Dragging { get { return IsMouseCaptured; } }
@@ -1167,6 +1232,7 @@ class VerticalBarSlider : Grid
         MouseMove += delegate(object s, MouseEventArgs e) { if (IsMouseCaptured) FromMouse(e); };
         MouseLeftButtonUp += delegate { ReleaseMouseCapture(); };
         MouseWheel += delegate(object s, MouseWheelEventArgs e) { Set(value + (e.Delta > 0 ? 0.03 : -0.03), true); e.Handled = true; };
+        new Jelly(this, true);
     }
 
     public bool Dragging { get { return IsMouseCaptured; } }
@@ -1287,8 +1353,8 @@ class Spring : EasingFunctionBase
 class Island : Window
 {
     // Sizes are in WPF units (1.25 screen pixels each on this laptop).
-    const double LineW = 124, LineH = 6, PillW = 236, PillH = 34, PopW = 340, PopH = 44, NoteW = 392, NoteH = 62;
-    const double ExpW = 520, ExpH = 262, WinW = 580, Gap = 5, SmallWinH = 84, BigWinH = ExpH + 40;
+    const double LineW = 124, LineH = 6, PillW = 236, PillH = 34, PopW = 340, PopH = 44, NoteW = 400, NoteH = 80;
+    const double ExpW = 520, ExpH = 270, WinW = 580, Gap = 5, SmallWinH = 84, BigWinH = ExpH + 40;
     const int TabMedia = 0, TabControls = 1, TabStats = 2, TabClipboard = 3, TabShelf = 4, TabTimer = 5, TabCount = 6;
     // Build.cmd makes three files that differ only in this number: WinUltra.exe (120 fps, the standard
     // build), WinUltra-HighFPS.exe (144 fps, for 144 Hz+ screens) and WinUltra-LowFPS.exe (60 fps, for slower PCs).
@@ -1305,7 +1371,7 @@ class Island : Window
     Mode mode = Mode.Collapsed;
     int animGen;
     IntPtr hwnd;
-    uint openMessage;
+    uint openMessage, recordMessage;
     uint fmtExclude, fmtCanInclude, fmtViewerIgnore;
 
     readonly Grid root = new Grid();
@@ -1314,10 +1380,55 @@ class Island : Window
     readonly Border lineGlow = new Border();
     readonly Grid aurora = new Grid();
     readonly Border rimOverlay = new Border();
+    // CreatorHUD: the resting line gets a plain even border; everything else the shiny one.
+    Brush rimFancy;
+    static readonly Brush RimPlain = UI.B("#40FFFFFF");
     readonly Border baseLayer = new Border();
     readonly Border pillBadge = UI.GlassBadge(24, 12);
     readonly Grid glass = new Grid();
     readonly ImageBrush glassBrush = new ImageBrush { Stretch = Stretch.Fill, ViewportUnits = BrushMappingMode.Absolute };
+
+    // CreatorHUD: live liquid glass (Glass.cs). The glass element is the island grown by GlassMargin on
+    // every side, filled with a live copy of the screen behind; the shader keeps it inside the shape.
+    const double GlassMargin = 24, LineSheen = 0;
+    readonly bool liquid = LiquidGlassEffect.Available;
+    LiveBackdrop backdrop;
+    LiquidGlassEffect glassFx;
+    ImageBrush liveBrush;
+    double glassTint = 0.5, blurTarget = 10, lookBase = 0.52, lookRange = 0.22, tintShown = -1;
+    int glassRate = -1;
+    bool warming;    // the mouse is near the resting line: start the glass early so it is fresh when it opens
+    System.Windows.Media.Effects.BlurEffect glassBlur;
+    bool recordable;
+    [DllImport("user32.dll")] static extern bool SetWindowDisplayAffinity(IntPtr h, uint affinity);
+
+    // CreatorHUD: the render bubble, a small glass circle beside the island with a progress ring.
+    const double BubbleSize = 34, BubbleGap = 8;
+    static readonly Brush RenderOrange = UI.B("#FF8A3D");
+    readonly Grid bubble = new Grid();
+    readonly TranslateTransform bubbleShift = new TranslateTransform();
+    readonly ScaleTransform bubbleScale = new ScaleTransform(0.4, 0.4);
+    LiquidGlassEffect bubbleFx;
+    Border bubbleBlurHost;
+    ImageBrush bubbleBrush;
+    readonly RingView ring = new RingView { Width = 27, Height = 27, Thickness = 2.6 };
+    readonly TextBlock ringText = UI.Text("", 9.5, UI.Fg, FontWeights.SemiBold);
+    RenderWatch renderWatch;
+    RenderStatus render = new RenderStatus();
+    bool bubbleShown;
+    DateTime renderEndedAt = DateTime.MinValue;
+    RingView miniRing;
+    TextBlock miniRingText;
+    StackPanel miniRingPanel;
+
+    // CreatorHUD: the tab bar, every tab an icon over its name, with a liquid glass capsule that glides.
+    const double TabW = 46, TabH = 32, TabPad = 3, TabEdge = 22;    // TabEdge: invisible room so the capsule can overshoot past the end tabs without being clipped
+    TabLensEffect tabFx;
+    Grid tabTrack;
+    readonly SolidColorBrush[] tabInk = new SolidColorBrush[TabCount];
+    readonly System.Windows.Media.Effects.DropShadowEffect[] tabGlow = new System.Windows.Media.Effects.DropShadowEffect[TabCount];
+    Border capsuleFallback;
+    readonly TranslateTransform capsuleShift = new TranslateTransform();
     readonly RadialGradientBrush auroraA, auroraB;
     readonly RectangleGeometry clip = new RectangleGeometry();
     readonly Grid collapsedLayer = new Grid(), popupLayer = new Grid(), expandedLayer = new Grid();
@@ -1444,14 +1555,18 @@ class Island : Window
     {
         Title = WinUltra.App.IslandTitle;
         WindowStyle = WindowStyle.None;
-        AllowsTransparency = true;
+        // CreatorHUD: by default a direct window. Windows draws it straight from the GPU with true
+        // see-through areas (DWM frame extended over the whole window), and a window region limits
+        // where it takes clicks. The classic layered window is kept as a fallback.
+        direct = !WinUltra.App.Options.ClassicWindow;
+        AllowsTransparency = !direct;
         Background = Brushes.Transparent;
         Topmost = true;
         ShowInTaskbar = false;
         ShowActivated = false;
         ResizeMode = ResizeMode.NoResize;
         Width = WinW;
-        Height = SmallWinH;
+        Height = direct ? BigWinH : SmallWinH;
         Top = 0;
         Left = (SystemParameters.PrimaryScreenWidth - WinW) / 2;
         FontFamily = UI.TextFont;
@@ -1470,7 +1585,7 @@ class Island : Window
         island.Height = LineH;
         // The solid dark base is its own layer, faded out while the glass shows: painted as the
         // island's background it left a dark fringe round the anti-aliased edge of the glass.
-        baseLayer.Background = new LinearGradientBrush(Color.FromRgb(0x1C, 0x1C, 0x24), Color.FromRgb(0x07, 0x07, 0x0A), 90);
+        baseLayer.Background = new LinearGradientBrush(Color.FromRgb(0x2C, 0x2C, 0x31), Color.FromRgb(0x1D, 0x1D, 0x21), 90);
         baseLayer.IsHitTestVisible = false;
         island.Background = Brushes.Transparent;
         var rim = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
@@ -1481,14 +1596,27 @@ class Island : Window
         // The bright rim is drawn just inside the shape: on the edge itself the rounded clip
         // cut it in half along the curves, which made the corners look stepped.
         rimOverlay.BorderBrush = rim;
+        rimFancy = rim;
         rimOverlay.BorderThickness = new Thickness(1);
         rimOverlay.Margin = new Thickness(0.75);
         rimOverlay.IsHitTestVisible = false;
         rimOverlay.Opacity = 0;
 
-        glass.Children.Add(new Border { Background = glassBrush });
-        var tintBrush = new LinearGradientBrush(Color.FromArgb(0x8C, 0x10, 0x10, 0x16), Color.FromArgb(0xB8, 0x08, 0x08, 0x0C), 90);
-        glass.Children.Add(new Border { Background = tintBrush });
+        if (liquid)
+        {
+            liveBrush = new ImageBrush { Stretch = Stretch.Fill, ViewportUnits = BrushMappingMode.Absolute, TileMode = TileMode.FlipXY };
+            glassFx = new LiquidGlassEffect { Margin = GlassMargin, Blur = 0.8, Tint = 0.5, Highlight = 0.28 };
+            // A real GPU blur under the glass shader: almost none at rest, a medium frost when open so the
+            // panel's text stays readable over busy windows.
+            var blurred = new Border { Background = liveBrush };    // pre-blurred by LiveBackdrop
+            glass.Children.Add(new Border { Child = blurred, Margin = new Thickness(-GlassMargin), Effect = Perf.Off("NOGLASS") ? null : glassFx, IsHitTestVisible = false });
+        }
+        else
+        {
+            glass.Children.Add(new Border { Background = glassBrush });
+            var tintBrush = new LinearGradientBrush(Color.FromArgb(0x8C, 0x10, 0x10, 0x16), Color.FromArgb(0xB8, 0x08, 0x08, 0x0C), 90);
+            glass.Children.Add(new Border { Background = tintBrush });
+        }
         glass.Opacity = 0;
         glass.IsHitTestVisible = false;
         RenderOptions.SetBitmapScalingMode(glass, BitmapScalingMode.Linear);
@@ -1501,12 +1629,13 @@ class Island : Window
         aurora.Children.Add(new Border { Width = 380, Height = 260, Background = auroraB, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(0, 0, -150, -140) });
         aurora.Opacity = 0;
         aurora.IsHitTestVisible = false;
+        aurora.Children.RemoveAt(1);    // CreatorHUD: only the album-art glow, no fixed purple
 
         // The idle state: a thin line with a soft blue-violet-pink sheen.
         var lineBrush = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 0) };
-        lineBrush.GradientStops.Add(new GradientStop(Color.FromRgb(0x6F, 0x8C, 0xFF), 0));
-        lineBrush.GradientStops.Add(new GradientStop(Color.FromRgb(0xB9, 0x7C, 0xFF), 0.5));
-        lineBrush.GradientStops.Add(new GradientStop(Color.FromRgb(0xFF, 0x8F, 0xCF), 1));
+        lineBrush.GradientStops.Add(new GradientStop(Color.FromArgb(0x20, 255, 255, 255), 0));
+        lineBrush.GradientStops.Add(new GradientStop(Color.FromArgb(0xD0, 255, 255, 255), 0.5));
+        lineBrush.GradientStops.Add(new GradientStop(Color.FromArgb(0x20, 255, 255, 255), 1));
         lineBrush.Freeze();
         lineGlow.Background = lineBrush;
         lineGlow.IsHitTestVisible = false;
@@ -1518,7 +1647,7 @@ class Island : Window
         layers.Children.Add(baseLayer);
         layers.Children.Add(glass);
         layers.Children.Add(aurora);
-        layers.Children.Add(sheen);
+        if (!liquid) layers.Children.Add(sheen);
         layers.Children.Add(lineGlow);
         layers.Children.Add(collapsedLayer);
         layers.Children.Add(popupLayer);
@@ -1527,13 +1656,15 @@ class Island : Window
         island.Child = layers;
 
         // The line is too thin to aim at, so an invisible strip around it catches the mouse.
-        hitStrip.Width = 200;
-        hitStrip.Height = 16;
+        hitStrip.Width = 290;     // CreatorHUD: a generous invisible margin, so the mouse only has to get close
+        hitStrip.Height = 34;
         hitStrip.VerticalAlignment = VerticalAlignment.Top;
         hitStrip.HorizontalAlignment = HorizontalAlignment.Center;
         hitStrip.Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0));
+        root.Children.Add(damage);
         root.Children.Add(hitStrip);
         root.Children.Add(island);
+        BuildBubble();
         privacyDot.RenderTransform = privacyShift;
         privacyDot.Effect = privacyGlow;
         root.Children.Add(privacyDot);
@@ -1550,7 +1681,6 @@ class Island : Window
         noteTimer = MakeTimer(3000, delegate { PollNotifications(); });
         privacyTimer = MakeTimer(300, delegate { privacyTimer.Stop(); UpdatePrivacy(); });
         MakeTimer(2000, delegate { UpdatePrivacy(); }).Start();    // microphone sessions
-        tabHoverTimer = MakeTimer(140, delegate { tabHoverTimer.Stop(); if (mode == Mode.Expanded && tabHoverTarget >= 0) SelectTab(tabHoverTarget); });
 
         BuildCollapsed();
         foreach (var layer in new[] { collapsedLayer, popupLayer, expandedLayer })
@@ -1563,12 +1693,14 @@ class Island : Window
 
         root.MouseEnter += delegate
         {
+            if (mode == Mode.Collapsed && !warming) { warming = true; UpdateGlassRate(); }
             leaveTimer.Stop();
             pinnedOpen = false;
             if (mode != Mode.Expanded) hoverTimer.Start();
         };
         root.MouseLeave += delegate
         {
+            if (warming) { warming = false; UpdateGlassRate(); }
             hoverTimer.Stop();
             if (mode == Mode.Expanded) leaveTimer.Start();
         };
@@ -1586,6 +1718,7 @@ class Island : Window
             Dispatcher.BeginInvoke(new Action(delegate
             {
                 Left = (SystemParameters.PrimaryScreenWidth - Width) / 2;
+                if (liquid) StartLiveGlass();
             }));
         };
     }
@@ -1627,6 +1760,11 @@ class Island : Window
     // Sizes the (mostly see-through) window around the island, keeping it centred.
     void Resize(double w, double h)
     {
+        if (direct) { UpdateRegion(); return; }    // the direct window keeps one size; its region does the work
+        // CreatorHUD: the window keeps one width and only grows or shrinks downward from the top.
+        // Changing width meant a second step to re-centre it, and the frame in between drew the pill
+        // off-centre for a blink (most visible on the music bars).
+        w = WinW;
         if (Math.Abs(Width - w) > 0.5) { Width = w; Left = (SystemParameters.PrimaryScreenWidth - w) / 2; }
         if (Math.Abs(Height - h) > 0.5) Height = h;
     }
@@ -1634,7 +1772,9 @@ class Island : Window
     void Reshape()
     {
         double w = island.ActualWidth, h = island.ActualHeight;
-        double r = Math.Min(h / 2, 28);
+        // A pill while short; past pill height the corners stay soft (about 23 for a notification,
+        // 28 for the open panel), so taller shapes read as rounded rectangles and nothing snaps.
+        double r = h <= 44 ? h / 2 : Math.Min(28, 22 + (h - 44) * 6 / 226);
         island.CornerRadius = new CornerRadius(r);
         clip.Rect = new Rect(0, 0, w, h);
         clip.RadiusX = r;
@@ -1642,8 +1782,9 @@ class Island : Window
         // Keep the glass pinned to the screen while the island grows around it.
         glassBrush.Viewport = new Rect((w - ExpW) / 2, 0, ExpW, ExpH);
         rimOverlay.CornerRadius = new CornerRadius(Math.Max(0, r - 0.75));
-        // The camera/mic dot rides just right of the island, like the iPhone's.
-        privacyShift.X = w / 2 + 14;
+        UpdateGlassGeometry(w, h, r);
+        // The camera/mic dot rides just right of the island, like the iPhone's (and right of the render bubble).
+        privacyShift.X = w / 2 + 14 + (bubbleShown ? BubbleGap + BubbleSize : 0);
         privacyDot.Margin = new Thickness(0, Gap + h / 2 - 5.5, 0, 0);
     }
 
@@ -1663,6 +1804,7 @@ class Island : Window
     // Takes a fresh blurred copy of the screen where the open panel will be.
     void CaptureBackdrop()
     {
+        if (liquid) return;    // CreatorHUD: the live glass is always current
 #if FRIENDS
         if (!WinUltra.App.Options.FrostedGlass) { glassBrush.ImageSource = null; return; }
 #endif
@@ -1675,6 +1817,401 @@ class Island : Window
             glassBrush.ImageSource = Backdrop.Capture(x, y, (int)Math.Round(ExpW * s), (int)Math.Round(ExpH * s));
         }
         catch (Exception ex) { Store.Log("backdrop: " + ex.Message); }
+    }
+
+    // ---------------------------------------------------------------- CreatorHUD: live glass
+
+    double GlassOn
+    {
+        get
+        {
+#if FRIENDS
+            return WinUltra.App.Options.FrostedGlass ? 1 : 0;
+#else
+            return 1;
+#endif
+        }
+    }
+
+    void StartLiveGlass()
+    {
+        try
+        {
+            var src = PresentationSource.FromVisual(this);
+            double s = src != null ? src.CompositionTarget.TransformToDevice.M11 : 1;
+            double sw = SystemParameters.PrimaryScreenWidth;
+            var area = new Rect(Math.Max(0, Math.Round((sw - WinW) / 2)), 0, WinW, BigWinH);
+            if (backdrop != null) { backdrop.FrameArrived -= OnGlassFrame; backdrop.Dispose(); }
+            backdrop = new LiveBackdrop(Dispatcher, area, s, 4);    // quarter size: it is blurred anyway
+            backdrop.FrameArrived += OnGlassFrame;
+            liveBrush.ImageSource = backdrop.Bitmap;
+            if (bubbleBrush != null) bubbleBrush.ImageSource = backdrop.Bitmap;
+            if (island.ActualWidth > 0) Reshape();
+            backdrop.SetFillSelf(recordable);
+            UpdateGlassRate();
+        }
+        catch (Exception ex) { Store.Log("live glass: " + ex); }
+    }
+
+    // How often the glass refreshes: smooth while open, gentler at rest, not at all while hidden.
+    void UpdateGlassRate()
+    {
+        bool line = mode == Mode.Collapsed && lineMode && !bubbleShown;
+        ApplyGlassLook(line);
+        if (backdrop == null) return;
+        int rate = hidden || GlassOn < 0.5 || gliding ? 0 : line ? (warming ? 30 : 0) : mode == Mode.Collapsed ? 10 : 30;
+        // Waking from a pause (the line opening, a pop-up): take one frame at once so the glass is current.
+        if (glassRate == 0 && rate > 0 && !gliding) try { backdrop.CaptureNow(); } catch (Exception) { }
+        glassRate = rate;
+        backdrop.SetRate(Perf.Off("NOCAPTURE") ? 0 : rate);
+    }
+
+    // Closed (the line): solid dark grey with a dim shiny rim. Wide (music, render, timer, pop-ups):
+    // the original look, dark tinted glass over a blurred background, with a soft glow taken from the
+    // album art. Open: denser acrylic, more blur, the same shiny rim.
+    void ApplyGlassLook(bool line)
+    {
+        bool open = mode == Mode.Expanded;
+        double blur = open ? 24 : 12;
+        if (backdrop != null && !line) backdrop.SetBlur(blur);
+        lookBase = open ? 0.38 : 0.54;
+        lookRange = open ? 0.26 : 0.2;
+        // Shown to recordings, live glass can't see past the island, so it wears solid dark glass.
+        bool solid = line;
+        FadeTo(glass, solid ? 0 : GlassOn, 260);
+        FadeTo(baseLayer, solid ? 1 : BaseUnderGlass, 200);
+        rimOverlay.BorderBrush = line ? RimPlain : rimFancy;
+        FadeTo(rimOverlay, 1, 260);
+        FadeTo(aurora, !open && !line && playing && artwork != null ? 0.55 : 0, 400);
+    }
+
+    // The tint follows what is behind: light over dark wallpaper, darker over bright windows so white
+    // text stays readable.
+    void OnGlassFrame()
+    {
+        if (backdrop == null || glassFx == null) return;
+        double k = Math.Max(0, Math.Min(1, (backdrop.Luminance - 0.30) / 0.5));
+        double target = lookBase + k * k * (3 - 2 * k) * lookRange;
+        glassTint += (target - glassTint) * 0.2;
+        if (Math.Abs(glassTint - tintShown) < 0.004) return;    // no visible change: don't redraw
+        tintShown = glassTint;
+        glassFx.Tint = glassTint;
+        if (bubbleFx != null) bubbleFx.Tint = Math.Min(0.75, (mode == Mode.Expanded ? 0.54 : glassTint) + 0.04);
+    }
+
+    void UpdateGlassGeometry(double w, double h, double r)
+    {
+        if (liquid && glassFx != null && w > 0 && h > 0)
+        {
+            double small = Math.Min(w, h);
+            glassFx.Size = new Point(w + 2 * GlassMargin, h + 2 * GlassMargin);
+            glassFx.Radius = r;
+            glassFx.Bezel = Math.Min(16, small * 0.45);
+            glassFx.Refraction = Math.Min(9, small * 0.25);
+            if (backdrop != null)
+            {
+                var a = backdrop.AreaDip;
+                double sw = SystemParameters.PrimaryScreenWidth;
+                double ox = sw / 2 - w / 2 - GlassMargin, oy = Gap - GlassMargin;
+                liveBrush.Viewport = new Rect(a.X - ox, a.Y - oy, a.Width, a.Height);
+                backdrop.SetMeter((sw / 2 - w / 2 - a.X) / a.Width, (Gap - a.Y) / a.Height, (sw / 2 + w / 2 - a.X) / a.Width, (Gap + h - a.Y) / a.Height);
+            }
+        }
+        PlaceBubble(w, h);
+        UpdateSelfMask();
+        UpdateRegion();
+        if (direct) damage.Opacity = damage.Opacity > 0.5 ? 0.5 : 0.51;
+        if (backdrop != null)
+            backdrop.SetDepth(Gap + Math.Max(Math.Max(h, double.IsNaN(island.Height) ? 0 : island.Height), BubbleSize) + GlassMargin + 6);
+    }
+
+    // Where the island and bubble are drawn, a little generous, so the cut-out covers them even while
+    // they animate between captures.
+    void UpdateSelfMask()
+    {
+        if (backdrop == null) return;
+        var a = backdrop.AreaDip;
+        double sw = SystemParameters.PrimaryScreenWidth, pad = 6;
+        double w = Math.Max(island.ActualWidth, double.IsNaN(island.Width) ? 0 : island.Width);
+        double h = Math.Max(island.ActualHeight, double.IsNaN(island.Height) ? 0 : island.Height);
+        double r = h <= 44 ? h / 2 : Math.Min(28, 22 + (h - 44) * 6 / 226);
+        double bcx = 0, bcy = 0, brad = 0;
+        if (bubble.Visibility == Visibility.Visible)
+        {
+            bcx = sw / 2 + bubbleShift.X + bubbleEmerge.X - a.X;
+            bcy = Gap + bubbleShift.Y + BubbleSize / 2 - a.Y;
+            brad = BubbleSize / 2 + pad;
+        }
+        backdrop.SetMask(sw / 2 - w / 2 - pad - a.X, Gap - pad - a.Y, w + 2 * pad, h + 2 * pad, r + pad, bcx, bcy, brad);
+    }
+
+    // Hides the island from screenshots and recordings (needed for live glass: otherwise the capture
+    // would see the island itself), or shows it there with the glass frozen.
+    public void SetRecordable(bool on)
+    {
+        // One last live frame before the island becomes visible to capture, so the frozen glass is current.
+        // Visible to recordings: the glass capture sees the island too, so it cuts it out and refills
+        // the hole from the background around it (LiveBackdrop.FillSelf). Hidden: no need.
+        recordable = on;
+        if (on && backdrop != null) backdrop.SetFillSelf(true);
+        if (hwnd != IntPtr.Zero && !SetWindowDisplayAffinity(hwnd, on ? 0u : 0x11u)) Store.Log("display affinity failed: " + Marshal.GetLastWin32Error());
+        if (!on && backdrop != null) Later(150, delegate { if (!recordable && backdrop != null) backdrop.SetFillSelf(false); });
+        UpdateGlassRate();
+    }
+
+    // ---------------------------------------------------------------- CreatorHUD: render bubble
+
+    readonly TranslateTransform bubbleEmerge = new TranslateTransform();
+
+    void BuildBubble()
+    {
+        bubble.Width = BubbleSize;
+        bubble.Height = BubbleSize;
+        bubble.HorizontalAlignment = HorizontalAlignment.Center;
+        bubble.VerticalAlignment = VerticalAlignment.Top;
+        bubble.Margin = new Thickness(0, Gap, 0, 0);
+        bubble.Background = Brushes.Transparent;
+        bubble.Cursor = Cursors.Hand;
+        var tg = new TransformGroup();
+        tg.Children.Add(bubbleScale);
+        tg.Children.Add(bubbleEmerge);
+        tg.Children.Add(bubbleShift);
+        bubble.RenderTransform = tg;
+        bubble.RenderTransformOrigin = new Point(0.5, 0.5);
+        bubble.Opacity = 0;
+        bubble.Visibility = Visibility.Collapsed;
+        if (liquid)
+        {
+            bubbleBrush = new ImageBrush { Stretch = Stretch.Fill, ViewportUnits = BrushMappingMode.Absolute, TileMode = TileMode.FlipXY };
+            bubbleFx = new LiquidGlassEffect { Margin = GlassMargin, Radius = BubbleSize / 2, Bezel = 11, Refraction = 6, Tint = 0.58, Highlight = 0.2, Blur = 0.8, Size = new Point(BubbleSize + 2 * GlassMargin, BubbleSize + 2 * GlassMargin) };
+            var bubbleBlurred = new Border { Background = bubbleBrush };
+            bubble.Children.Add(new Border { CornerRadius = new CornerRadius(BubbleSize / 2), Background = new LinearGradientBrush(Color.FromRgb(0x2C, 0x2C, 0x31), Color.FromRgb(0x1D, 0x1D, 0x21), 90), IsHitTestVisible = false });
+            bubbleBlurHost = new Border { Child = bubbleBlurred, Margin = new Thickness(-GlassMargin), Effect = bubbleFx, IsHitTestVisible = false };
+            bubble.Children.Add(bubbleBlurHost);
+            bubble.Children.Add(new System.Windows.Shapes.Ellipse { Stroke = rimOverlay.BorderBrush, StrokeThickness = 1, Margin = new Thickness(0.5), IsHitTestVisible = false });
+        }
+        else
+        {
+            bubble.Children.Add(new Border { CornerRadius = new CornerRadius(BubbleSize / 2), Background = UI.B("#E6101014"), BorderBrush = UI.Specular, BorderThickness = new Thickness(1), IsHitTestVisible = false });
+        }
+        ring.HorizontalAlignment = HorizontalAlignment.Center;
+        ring.VerticalAlignment = VerticalAlignment.Center;
+        ring.Fill = RenderOrange;
+        bubble.Children.Add(ring);
+        ringText.HorizontalAlignment = HorizontalAlignment.Center;
+        ringText.TextAlignment = TextAlignment.Center;
+        ringText.IsHitTestVisible = false;
+        bubble.Children.Add(ringText);
+        bubble.MouseLeftButtonUp += (s, e) => { e.Handled = true; OpenPinned(-1); };
+        root.Children.Add(bubble);
+    }
+
+    void PlaceBubble(double w, double h)
+    {
+        double x = w / 2 + BubbleGap + BubbleSize / 2;
+        double y = h > BubbleSize ? (h - BubbleSize) / 2 : 0;
+        bubbleShift.X = x;
+        bubbleShift.Y = y;
+        if (liquid && bubbleBrush != null && backdrop != null)
+        {
+            var a = backdrop.AreaDip;
+            double sw = SystemParameters.PrimaryScreenWidth;
+            double ox = sw / 2 + x - BubbleSize / 2 - GlassMargin, oy = Gap + y - GlassMargin;
+            bubbleBrush.Viewport = new Rect(a.X - ox, a.Y - oy, a.Width, a.Height);
+        }
+    }
+
+    // The bubble buds off the island's right edge while a render runs, and melts back when it ends.
+    void SyncBubble()
+    {
+        bool want = RenderLive && mode != Mode.Expanded && !hidden;
+        if (want == bubbleShown) return;
+        bubbleShown = want;
+        double w = island.ActualWidth > 0 ? island.ActualWidth : island.Width;
+        if (want)
+        {
+            bubble.Visibility = Visibility.Visible;
+            if (mode == Mode.Collapsed) Resize(Math.Max(Width, PillW + 84 + 2 * (BubbleGap + BubbleSize + 6)), Math.Max(Height, PillH + Gap + 14));
+            bubble.BeginAnimation(OpacityProperty, Anim(1, 200, new CubicEase { EasingMode = EasingMode.EaseOut }, 80));
+            bubbleScale.BeginAnimation(ScaleTransform.ScaleXProperty, Anim(1, 620, Spring.Bouncy, 60));
+            bubbleScale.BeginAnimation(ScaleTransform.ScaleYProperty, Anim(1, 620, Spring.Bouncy, 60));
+            bubbleEmerge.X = -(BubbleGap + BubbleSize / 2 + 4);
+            bubbleEmerge.BeginAnimation(TranslateTransform.XProperty, Anim(0, 620, Spring.Bouncy, 40));
+        }
+        else
+        {
+            var fade = Anim(0, 200, new CubicEase { EasingMode = EasingMode.EaseIn }, 0);
+            fade.Completed += delegate { if (!bubbleShown) bubble.Visibility = Visibility.Collapsed; };
+            bubble.BeginAnimation(OpacityProperty, fade);
+            bubbleScale.BeginAnimation(ScaleTransform.ScaleXProperty, Anim(0.5, 260, new CubicEase { EasingMode = EasingMode.EaseIn }, 0));
+            bubbleScale.BeginAnimation(ScaleTransform.ScaleYProperty, Anim(0.5, 260, new CubicEase { EasingMode = EasingMode.EaseIn }, 0));
+            bubbleEmerge.BeginAnimation(TranslateTransform.XProperty, Anim(-(BubbleGap + BubbleSize / 2 + 4), 260, new CubicEase { EasingMode = EasingMode.EaseIn }, 0));
+        }
+        privacyShift.X = w / 2 + 14 + (bubbleShown ? BubbleGap + BubbleSize : 0);
+        UpdateSelfMask();
+        UpdateRegion();
+        UpdateGlassRate();
+    }
+
+    void OnRender(RenderStatus s)
+    {
+        bool was = render.Rendering;
+        render = s;
+        if (s.Rendering) renderEndedAt = DateTime.MinValue;
+        else if (was) renderEndedAt = DateTime.Now;
+        UpdateRing();
+        if (was && !s.Rendering)
+        {
+            if (s.State == "complete")
+            {
+                var pop = MakePopup("\uE73E", UI.Green, "Render done", false);
+                pop.Value.Text = RenderDoneDetail(s);
+                pop.Value.Foreground = UI.Dim;
+                pop.Value.FontWeight = FontWeights.Normal;
+                ShowPopup(pop.Root, 360, PopH, 4000, false);
+            }
+            Later(6100, delegate
+            {
+                if (render.Rendering) return;
+                UpdateRing();
+                UpdateCollapsed();
+                if (mode == Mode.Collapsed) ApplyCollapsed(true); else SyncBubble();
+            });
+        }
+        UpdateCollapsed();
+        if (mode == Mode.Collapsed) ApplyCollapsed(true); else SyncBubble();
+    }
+
+    void UpdateRing()
+    {
+        bool done = render.State == "complete", stopped = render.State == "cancelled";
+        bool unknown = render.Rendering && render.Progress < 0;
+        double target = done ? 1 : Math.Max(0, Math.Min(0.995, render.Progress));
+        var fill = done ? UI.Green : stopped ? UI.Dim : RenderOrange;
+        foreach (var r in new[] { ring, miniRing })
+        {
+            if (r == null) continue;
+            r.Fill = fill;
+            r.SetIndeterminate(unknown);
+            r.BeginAnimation(RingView.ProgressProperty, Anim(target, 420, new CubicEase { EasingMode = EasingMode.EaseOut }, 0));
+        }
+        int pct = (int)Math.Floor(Math.Max(0, render.Progress) * 100);
+        if (render.Rendering) pct = Math.Min(99, pct);
+        if (done || stopped)
+        {
+            ringText.FontFamily = UI.IconFont;
+            ringText.FontSize = 12;
+            ringText.Text = done ? "" : "";
+            ringText.Foreground = done ? UI.Green : UI.Dim;
+        }
+        else
+        {
+            ringText.FontFamily = UI.TextFont;
+            ringText.FontSize = pct >= 10 ? 9.5 : 10;
+            ringText.Text = unknown ? "" : pct + "%";
+            ringText.Foreground = UI.Fg;
+        }
+        if (miniRingPanel != null)
+        {
+            miniRingPanel.Visibility = RenderLive ? Visibility.Visible : Visibility.Collapsed;
+            miniRingText.Text = done ? "Render done" : stopped ? "Stopped" : unknown ? "Rendering" : pct + "%" + (render.Eta > 0 ? "  " + Eta(render.Eta) : "");
+            miniRingText.Foreground = done ? UI.Green : UI.Fg;
+        }
+    }
+
+    static string Eta(double seconds)
+    {
+        if (seconds < 60) return (int)Math.Ceiling(seconds) + "s left";
+        if (seconds < 3600) return (int)Math.Ceiling(seconds / 60) + "m left";
+        return (int)(seconds / 3600) + "h " + (int)(seconds % 3600 / 60) + "m left";
+    }
+
+    static string RenderDoneDetail(RenderStatus s)
+    {
+        string file = string.IsNullOrEmpty(s.File) ? "" : System.IO.Path.GetFileNameWithoutExtension(s.File);
+        if (file.Length > 16) file = file.Substring(0, 15) + "\u2026";
+        var t = TimeSpan.FromSeconds(Math.Max(0, s.Elapsed));
+        string took = t.TotalMinutes >= 1 ? (int)t.TotalMinutes + "m " + t.Seconds + "s" : t.Seconds + "s";
+        return file.Length > 0 ? file + "  \u00B7  " + took : took;
+    }
+
+    string RenderLabel()
+    {
+        if (render.State == "complete") return "Render done";
+        if (render.State == "cancelled") return "Render stopped";
+        if (render.Animation) return "Frame " + Math.Min(render.FramesTotal, render.FramesDone + 1) + "/" + render.FramesTotal;
+        if (render.Samples > 0) return "Sample " + render.Sample + "/" + render.Samples;
+        return "Rendering";
+    }
+
+    // ---------------------------------------------------------------- CreatorHUD: direct window and its region
+
+    readonly bool direct;
+    // A see-through rectangle over the whole window. Nudging its opacity marks the whole window as
+    // changed, so WPF redraws all of it: while the island springs, no stale frame can show around it.
+    readonly System.Windows.Shapes.Rectangle damage = new System.Windows.Shapes.Rectangle { Fill = Brushes.Transparent, IsHitTestVisible = false, Opacity = 0.5 };
+    double targetW = LineW, targetH = LineH;
+    bool animating;
+    string lastRegion;
+
+    [StructLayout(LayoutKind.Sequential)] struct DwmMargins { public int Left, Right, Top, Bottom; }
+    [DllImport("dwmapi.dll")] static extern int DwmExtendFrameIntoClientArea(IntPtr h, ref DwmMargins m);
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int value, int size);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateRoundRectRgn(int x1, int y1, int x2, int y2, int w, int h);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateEllipticRgn(int x1, int y1, int x2, int y2);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int x1, int y1, int x2, int y2);
+    [DllImport("gdi32.dll")] static extern int CombineRgn(IntPtr dst, IntPtr a, IntPtr b, int mode);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr o);
+    [DllImport("user32.dll")] static extern int SetWindowRgn(IntPtr h, IntPtr rgn, bool redraw);
+
+    // The window takes clicks (and draws) only inside this shape: the island, the render bubble, the
+    // camera dot and, at rest, the invisible strip around the line. Everywhere else clicks fall through
+    // to whatever is underneath. While the island springs it is a little larger, so the overshoot is
+    // never clipped; when it settles it hugs the island again.
+    void UpdateRegion()
+    {
+        if (!direct || hwnd == IntPtr.Zero) return;
+        double s = 1;
+        try { var src = PresentationSource.FromVisual(this); if (src != null) s = src.CompositionTarget.TransformToDevice.M11; } catch (Exception) { }
+        double winW = ActualWidth > 0 ? ActualWidth : WinW;
+        double w = Math.Max(island.ActualWidth, animating ? targetW : 0), h = Math.Max(island.ActualHeight, animating ? targetH : 0);
+        double padX = animating ? Math.Max(4, w * 0.07) : 2, padY = animating ? Math.Max(4, h * 0.07) : 2;
+        double r = h <= 44 ? h / 2 : Math.Min(28, 22 + (h - 44) * 6 / 226);
+        int x0 = (int)Math.Floor((winW / 2 - w / 2 - padX) * s), y0 = (int)Math.Floor((Gap - padY) * s);
+        int x1 = (int)Math.Ceiling((winW / 2 + w / 2 + padX) * s), y1 = (int)Math.Ceiling((Gap + h + padY) * s);
+        int rr = (int)Math.Round((r + padX) * 2 * s);
+        var key = new System.Text.StringBuilder();
+        key.Append(x0).Append(',').Append(y0).Append(',').Append(x1).Append(',').Append(y1).Append(',').Append(rr);
+        bool strip = hitStrip.Visibility == Visibility.Visible;
+        bool bub = bubble.Visibility == Visibility.Visible;
+        bool dot = privacyDot.Visibility == Visibility.Visible;
+        int sx0 = 0, sy1 = 0, sx1 = 0, bx0 = 0, by0 = 0, bx1 = 0, by1 = 0, dx0 = 0, dy0 = 0, dx1 = 0, dy1 = 0;
+        if (strip)
+        {
+            sx0 = (int)Math.Floor((winW - hitStrip.Width) / 2 * s); sx1 = (int)Math.Ceiling((winW + hitStrip.Width) / 2 * s); sy1 = (int)Math.Ceiling(hitStrip.Height * s);
+            key.Append("|s").Append(sx0).Append(',').Append(sx1).Append(',').Append(sy1);
+        }
+        if (bub)
+        {
+            double cx = winW / 2 + bubbleShift.X, cy = Gap + bubbleShift.Y + BubbleSize / 2, br = BubbleSize / 2 + 3;
+            bx0 = (int)Math.Floor((cx - br) * s); bx1 = (int)Math.Ceiling((cx + br) * s); by0 = (int)Math.Floor((cy - br) * s); by1 = (int)Math.Ceiling((cy + br) * s);
+            key.Append("|b").Append(bx0).Append(',').Append(by0);
+        }
+        if (dot)
+        {
+            double cx = winW / 2 + privacyShift.X, cy = Gap + h / 2, dr = 12;
+            dx0 = (int)Math.Floor((cx - dr) * s); dx1 = (int)Math.Ceiling((cx + dr) * s); dy0 = (int)Math.Floor((cy - dr) * s); dy1 = (int)Math.Ceiling((cy + dr) * s);
+            key.Append("|d").Append(dx0).Append(',').Append(dy0);
+        }
+        string k = key.ToString();
+        if (k == lastRegion) return;
+        lastRegion = k;
+        IntPtr rgn = CreateRoundRectRgn(x0, y0, x1 + 1, y1 + 1, rr, rr);
+        if (strip) { var p = CreateRectRgn(sx0, 0, sx1, sy1); CombineRgn(rgn, rgn, p, 2); DeleteObject(p); }
+        if (bub) { var p = CreateEllipticRgn(bx0, by0, bx1 + 1, by1 + 1); CombineRgn(rgn, rgn, p, 2); DeleteObject(p); }
+        if (dot) { var p = CreateEllipticRgn(dx0, dy0, dx1 + 1, dy1 + 1); CombineRgn(rgn, rgn, p, 2); DeleteObject(p); }
+        // Redraw, so pixels left over from before never show in a newly included corner.
+        if (SetWindowRgn(hwnd, rgn, true) == 0) DeleteObject(rgn);    // on success Windows owns the region
     }
 
     // ---------------------------------------------------------------- window setup
@@ -1694,7 +2231,24 @@ class Island : Window
         var kb = new[] { new Native.RAWINPUTDEVICE { UsagePage = 1, Usage = 6, Flags = 0x100, Target = hwnd } };
         Native.RegisterRawInputDevices(kb, 1, (uint)Marshal.SizeOf(typeof(Native.RAWINPUTDEVICE)));
 #endif
+        if (direct)
+        {
+            try
+            {
+                HwndSource.FromHwnd(hwnd).CompositionTarget.BackgroundColor = Colors.Transparent;
+                var m = new DwmMargins { Left = -1, Right = -1, Top = -1, Bottom = -1 };
+                DwmExtendFrameIntoClientArea(hwnd, ref m);
+                int dontRound = 1, noBorder = unchecked((int)0xFFFFFFFE);
+                DwmSetWindowAttribute(hwnd, 33, ref dontRound, 4);    // DWMWA_WINDOW_CORNER_PREFERENCE: none
+                DwmSetWindowAttribute(hwnd, 34, ref noBorder, 4);     // DWMWA_BORDER_COLOR: none
+            }
+            catch (Exception dex) { Store.Log("direct window: " + dex.Message); }
+            UpdateRegion();
+        }
+        if (liquid) StartLiveGlass();
+        SetRecordable(WinUltra.App.Options.Recordable);
         openMessage = Native.RegisterWindowMessage("DynamicIslandOpenTab");
+        recordMessage = Native.RegisterWindowMessage("CreatorHUDRecordable");
         fmtExclude = Native.RegisterClipboardFormat("ExcludeClipboardContentFromMonitorProcessing");
         fmtCanInclude = Native.RegisterClipboardFormat("CanIncludeInClipboardHistory");
         fmtViewerIgnore = Native.RegisterClipboardFormat("Clipboard Viewer Ignore");
@@ -1727,6 +2281,11 @@ class Island : Window
         catch (Exception ex) { Store.Log("privacy: " + ex.Message); }
         InitBluetoothWatch();
         InitBrightnessWatch();
+        Perf.State = () => mode + (capRunning ? " glide" : "") + (scrubbing ? " scrub" : "");
+        Perf.Start();
+        renderWatch = new RenderWatch(WinUltra.App.DataDir);
+        renderWatch.Changed += OnRender;
+        renderWatch.Start();
         Later(8000, delegate { if (mode != Mode.Expanded) Native.TrimMemory(); });
     }
 
@@ -1767,14 +2326,20 @@ class Island : Window
         if (on) capsTimer.Start(); else capsTimer.Stop();
     }
 
-    public void SetFrostedGlass(bool on) { if (!on) glassBrush.ImageSource = null; }
+    public void SetFrostedGlass(bool on)
+    {
+        if (!on) glassBrush.ImageSource = null;
+        FadeTo(glass, GlassOn, 200);
+        FadeTo(baseLayer, BaseUnderGlass, 200);
+        UpdateGlassRate();
+    }
 #else
     const string PickerHint = " pastes from here";
 #endif
 
     public void ShowWelcome()
     {
-        var p = MakePopup("\uE945", UI.Purple, "WinUltra is running", false);
+        var p = MakePopup("\uE945", UI.Purple, "CreatorHUD is running", false);
         p.Value.Text = "Hover the line";
         p.Value.Foreground = UI.Dim;
         ShowPopup(p.Root, 380, PopH, 4500, true);
@@ -1824,6 +2389,12 @@ class Island : Window
             clipTimer.Stop();
             clipTimer.Start();
         }
+        else if (recordMessage != 0 && msg == (int)recordMessage)
+        {
+            // For screenshots of the island itself: 1 shows it to capture (glass frozen), 0 hides it again.
+            SetRecordable(w.ToInt32() == 1 || (w.ToInt32() != 0 && WinUltra.App.Options.Recordable));
+            handled = true;
+        }
         else if (openMessage != 0 && msg == (int)openMessage)
         {
             OpenPinned(w.ToInt32());
@@ -1853,6 +2424,7 @@ class Island : Window
     {
         int gen = ++animGen;
         double ms = bouncy ? 620 : 520;
+        targetW = w; targetH = h; animating = true;
         IEasingFunction ease = bouncy ? (IEasingFunction)Spring.Bouncy : Spring.Soft;
         var aw = Anim(w, ms, ease, 0);
         var ah = Anim(h, ms, ease, 0);
@@ -1864,6 +2436,8 @@ class Island : Window
             island.BeginAnimation(HeightProperty, null);
             island.Width = w;
             island.Height = h;
+            animating = false;
+            UpdateRegion();
             if (done != null) done();
         };
         island.BeginAnimation(WidthProperty, aw);
@@ -1922,12 +2496,14 @@ class Island : Window
         StopBars();
         FadeTo(lineGlow, 0, 160);
         FadeTo(rimOverlay, 1, 300);
-        FadeTo(glass, 1, 320);
+        FadeTo(glass, GlassOn, 320);
         FadeTo(baseLayer, BaseUnderGlass, 320);
         FadeTo(aurora, 0.6, 500);
         ShowLayer(expandedLayer, 110);
         AnimateTo(ExpW, ExpH, true, null);
         StartLive();
+        SyncBubble();
+        UpdateGlassRate();
     }
 
     void MaybeCollapse()
@@ -1954,7 +2530,8 @@ class Island : Window
         Native.POINT p;
         if (!Native.GetCursorPos(out p) || PresentationSource.FromVisual(island) == null) return false;
         var local = island.PointFromScreen(new Point(p.X, p.Y));
-        if (local.X >= 0 && local.Y >= -Gap && local.X <= island.ActualWidth && local.Y <= island.ActualHeight) return true;
+        const double slack = 10;
+        if (local.X >= -slack && local.Y >= -Gap - slack && local.X <= island.ActualWidth + slack && local.Y <= island.ActualHeight + slack) return true;
         if (hitStrip.Visibility != Visibility.Visible) return false;
         local = hitStrip.PointFromScreen(new Point(p.X, p.Y));
         return local.X >= 0 && local.Y >= 0 && local.X <= hitStrip.ActualWidth && local.Y <= hitStrip.ActualHeight;
@@ -1985,7 +2562,7 @@ class Island : Window
             HideLayer(collapsedLayer);
             FadeTo(lineGlow, 0, 140);
             FadeTo(rimOverlay, 1, 260);
-            FadeTo(glass, 1, 260);
+            FadeTo(glass, GlassOn, 260);
             FadeTo(baseLayer, BaseUnderGlass, 260);
             FadeTo(aurora, 0.5, 400);
             ShowLayer(popupLayer, 90);
@@ -1995,6 +2572,8 @@ class Island : Window
         popupTimer.Interval = TimeSpan.FromMilliseconds(ms);
         popupTimer.Stop();
         popupTimer.Start();
+        SyncBubble();
+        UpdateGlassRate();
     }
 
     void EndPopup()
@@ -2013,13 +2592,13 @@ class Island : Window
         lineMode = line;
         hitStrip.Visibility = line ? Visibility.Visible : Visibility.Collapsed;
         double w = line ? LineW : PillW, h = line ? LineH : PillH;
-        FadeTo(glass, 0, 300);    // the resting pill is solid black, like the iPhone's
-        FadeTo(baseLayer, 1, 200);
+        FadeTo(glass, GlassOn, 300);    // CreatorHUD: the resting pill and line are live glass too
+        FadeTo(baseLayer, BaseUnderGlass, 200);
         if (line)
         {
             HideLayer(collapsedLayer);
             StopBars();
-            FadeTo(lineGlow, 0.9, 260);
+            FadeTo(lineGlow, LineSheen, 260);
             FadeTo(rimOverlay, 0, 200);
             FadeTo(aurora, 0, 260);
         }
@@ -2034,11 +2613,14 @@ class Island : Window
         Action done = delegate
         {
             // At rest the window hugs the line or pill, so the music bars redraw a small area.
-            if (mode == Mode.Collapsed) Resize(line ? 262 : PillW + 84, line ? 30 : PillH + Gap + 14);
+            double extra = bubbleShown ? 2 * (BubbleGap + BubbleSize + 6) : 0;
+            if (mode == Mode.Collapsed) Resize((line ? 300 : PillW + 84) + extra, line ? 36 : PillH + Gap + 14);
             trimTimer.Stop();
             trimTimer.Start();
         };
-        if (!animate) { island.Width = w; island.Height = h; lineGlow.Opacity = line ? 0.9 : 0; done(); return; }
+        SyncBubble();
+        UpdateGlassRate();
+        if (!animate) { targetW = w; targetH = h; island.Width = w; island.Height = h; lineGlow.Opacity = line ? LineSheen : 0; done(); return; }
         Resize(Math.Max(Width, w + 30), Math.Max(Height, h + Gap + 12));    // room for the spring's overshoot
         if (Math.Abs(island.ActualWidth - w) > 0.5 || Math.Abs(island.ActualHeight - h) > 0.5) AnimateTo(w, h, false, done);
         else done();
@@ -2057,12 +2639,14 @@ class Island : Window
             if (mode == Mode.Expanded) Collapse();
             StopBars();
             Hide();
+            UpdateGlassRate();
         }
         else if (!full && hidden)
         {
             hidden = false;
             Show();
             Native.SetWindowPos(hwnd, new IntPtr(-1), 0, 0, 0, 0, 0x13);    // HWND_TOPMOST, no move/size/activate
+            UpdateGlassRate();
             if (mode == Mode.Collapsed && playing && !lineMode && !timerRunning && !stopwatch.IsRunning) StartBars();
         }
 
@@ -2118,7 +2702,9 @@ class Island : Window
         UpdateCollapsed();
     }
 
-    bool HasStatus() { return timerRunning || stopwatch.IsRunning || playing || (onAc && batteryPercent >= 0 && batteryPercent < 100 && charging); }
+    bool HasStatus() { return timerRunning || stopwatch.IsRunning || playing || RenderLive || (onAc && batteryPercent >= 0 && batteryPercent < 100 && charging); }
+
+    bool RenderLive { get { return render.Rendering || (DateTime.Now - renderEndedAt).TotalSeconds < 6; } }
 
     bool charging;
 
@@ -2147,6 +2733,16 @@ class Island : Window
             if (artwork != null) { pillArt.Background = new ImageBrush(artwork) { Stretch = Stretch.UniformToFill }; pillArt.Visibility = Visibility.Visible; }
             else { pillIcon.Text = ""; pillIcon.Foreground = UI.Fg; pillIcon.Visibility = Visibility.Visible; }
             pillBars.Visibility = Visibility.Visible;
+        }
+        else if (RenderLive)
+        {
+            bool done = !render.Rendering && render.State == "complete";
+            pillIcon.Text = done ? "\uE73E" : "\uE714";
+            pillIcon.Foreground = done ? UI.Green : RenderOrange;
+            pillIcon.Visibility = Visibility.Visible;
+            pillText.Text = RenderLabel();
+            pillText.Foreground = done ? UI.Green : UI.Fg;
+            pillText.Visibility = Visibility.Visible;
         }
         else if (HasStatus())
         {
@@ -2302,6 +2898,7 @@ class Island : Window
         privacyDot.Fill = cam.Count > 0 ? UI.Green : UI.Orange;
         privacyGlow.Color = cam.Count > 0 ? Color.FromRgb(0x30, 0xD1, 0x58) : Color.FromRgb(0xFF, 0x9F, 0x0A);
         privacyDot.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
+        UpdateRegion();
         if (any && !privacyPulsing)
         {
             var pulse = new DoubleAnimation(1, 0.45, TimeSpan.FromSeconds(0.9)) { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever, EasingFunction = new SineEase() };
@@ -2506,28 +3103,46 @@ class Island : Window
         catch (Exception) { }
         try
         {
-            var reference = n.AppInfo.DisplayInfo.GetLogo(new Windows.Foundation.Size(48, 48));
+            var reference = n.AppInfo.DisplayInfo.GetLogo(new Windows.Foundation.Size(96, 96));
             var ms = new MemoryStream();
             using (var ras = await reference.OpenReadAsync())
-            using (var st = ras.AsStreamForRead())
+            using (var st = WinRtAwait.ToMemoryStream(ras))
                 st.CopyTo(ms);
             ms.Position = 0;
             var bi = new BitmapImage();
             bi.BeginInit();
             bi.CacheOption = BitmapCacheOption.OnLoad;
-            bi.DecodePixelWidth = 64;
+            bi.DecodePixelWidth = 128;
             bi.StreamSource = ms;
             bi.EndInit();
             bi.Freeze();
             logo = bi;
         }
         catch (Exception) { }
+        // Apps that aren't Store apps (Discord, browsers...) have no package logo: ask the shell for the
+        // app's own icon, and failing that take it from the running program.
+        if (logo == null) { string aumid = null; try { aumid = n.AppInfo.AppUserModelId; } catch (Exception) { } logo = AppIcons.FromAppId(aumid) ?? AppIcons.FromProcess(app); }
         if (string.IsNullOrEmpty(head)) head = "New notification";
 
         var g = UI.Columns(UI.Px(38), UI.Star);
-        g.Margin = new Thickness(14, 0, 22, 0);
+        g.Margin = new Thickness(18, 14, 24, 14);
         var icon = new Border { Width = 34, Height = 34, CornerRadius = new CornerRadius(10), VerticalAlignment = VerticalAlignment.Center, Background = UI.Panel_ };
-        if (logo != null) icon.Child = new Image { Source = logo, Width = 26, Height = 26 };
+        bool tile = false;
+        var trimmed = logo != null ? TrimLogo((BitmapSource)logo, out tile) : null;
+        if (trimmed != null && tile)
+        {
+            // A solid square tile (Spotify, WhatsApp...): it becomes the rounded box itself.
+            icon.Background = new ImageBrush(trimmed) { Stretch = Stretch.UniformToFill };
+            icon.BorderBrush = UI.Rim;
+            icon.BorderThickness = new Thickness(1);
+        }
+        else if (trimmed != null)
+        {
+            // A see-through logo: trimmed to its drawn shape and sized to fill the box.
+            var img = new Image { Source = trimmed, Stretch = Stretch.Uniform, Margin = new Thickness(4) };
+            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+            icon.Child = img;
+        }
         else icon.Child = UI.Icon("", 16, UI.Fg);
         g.Children.Add(UI.At(icon, 0));
         var s = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
@@ -2536,6 +3151,36 @@ class Island : Window
         if (body.Length > 0) s.Children.Add(UI.Text(body.Replace('\n', ' '), 12, UI.Dim, FontWeights.Normal));
         g.Children.Add(UI.At(s, 1));
         ShowPopup(g, NoteW, NoteH, 4200, false);
+    }
+
+    // App logos arrive with a lot of transparent padding. This crops to the drawn part and squares it,
+    // and says whether the logo is a solid tile (opaque corners) rather than a free-standing symbol.
+    static BitmapSource TrimLogo(BitmapSource src, out bool tile)
+    {
+        tile = false;
+        try
+        {
+            var bgra = new FormatConvertedBitmap(src, PixelFormats.Bgra32, null, 0);
+            int w = bgra.PixelWidth, h = bgra.PixelHeight;
+            var px = new byte[w * h * 4];
+            bgra.CopyPixels(px, w * 4, 0);
+            int x0 = w, y0 = h, x1 = -1, y1 = -1;
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                    if (px[(y * w + x) * 4 + 3] > 24) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+            if (x1 < 0) return src;
+            int bw = x1 - x0 + 1, bh = y1 - y0 + 1, side = Math.Max(bw, bh);
+            int cx = x0 + bw / 2, cy = y0 + bh / 2;
+            int sx = Math.Max(0, Math.Min(w - side, cx - side / 2)), sy = Math.Max(0, Math.Min(h - side, cy - side / 2));
+            side = Math.Min(side, Math.Min(w - sx, h - sy));
+            Func<int, int, bool> solid = (x, y) => px[(y * w + x) * 4 + 3] > 230;
+            int inset = Math.Max(1, side / 12);
+            tile = solid(sx + inset, sy + inset) && solid(sx + side - 1 - inset, sy + inset) && solid(sx + inset, sy + side - 1 - inset) && solid(sx + side - 1 - inset, sy + side - 1 - inset);
+            var crop = new CroppedBitmap(bgra, new Int32Rect(sx, sy, side, side));
+            crop.Freeze();
+            return crop;
+        }
+        catch (Exception) { return src; }
     }
 
     // ---------------------------------------------------------------- expanded panel
@@ -2552,45 +3197,99 @@ class Island : Window
         panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         panel.RowDefinitions.Add(new RowDefinition { Height = UI.Star });
 
-        // Tab bar: icons, with the name shown only on the open tab.
-        var bar = UI.Columns(UI.Star, UI.Auto);
-        var tabs = new StackPanel { Orientation = Orientation.Horizontal };
+        // CreatorHUD tab bar: every tab is an icon over its name on a glass track. Clicking a tab glides
+        // a liquid glass capsule to it; the labels it passes over are magnified and bent (TabLensEffect).
+        var bar = UI.Columns(UI.Auto, UI.Star, UI.Auto);
         string[] names = { "Media", "Controls", "Stats", "Clipboard", "Shelf", "Timer" };
         string[] glyphs = { "", "", "", "", "", ClockGlyph };
+        double trackH = TabH + 2 * TabPad;
+        tabTrack = new Grid { Width = TabCount * TabW + 2 * TabPad + 2 * TabEdge, Height = trackH, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(-TabEdge, 0, -TabEdge, 0) };
+        // An invisible filler: the effect's area is whatever is drawn, so this makes it the full width,
+        // edges included, keeping the capsule's coordinates exact.
+        tabTrack.Children.Add(new System.Windows.Shapes.Rectangle { Fill = Brushes.Transparent, IsHitTestVisible = false });
+        tabTrack.Children.Add(new Border
+        {
+            Margin = new Thickness(TabEdge, 0, TabEdge, 0),
+            CornerRadius = new CornerRadius(trackH / 2),
+            Background = UI.B("#10FFFFFF"),
+            BorderBrush = UI.B("#1AFFFFFF"),
+            BorderThickness = new Thickness(1),
+        });
+        if (!TabLensEffect.Available)
+        {
+            capsuleFallback = new Border
+            {
+                Width = TabW, Height = TabH, CornerRadius = new CornerRadius(TabH / 2),
+                Background = UI.GlassFill(Color.FromRgb(0x8A, 0x8A, 0x9A), 0x40), BorderBrush = UI.Specular, BorderThickness = new Thickness(1),
+                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(TabPad + TabEdge, TabPad, TabPad, TabPad),
+                RenderTransform = capsuleShift, IsHitTestVisible = false,
+            };
+            tabTrack.Children.Add(capsuleFallback);
+        }
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(TabPad + TabEdge, TabPad, TabPad, TabPad), HorizontalAlignment = HorizontalAlignment.Left };
         for (int i = 0; i < TabCount; i++)
         {
             int index = i;
-            var content = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(11, 0, 11, 0), VerticalAlignment = VerticalAlignment.Center };
-            content.Children.Add(UI.Icon(glyphs[i], 13, UI.Fg));
-            tabLabels[i] = UI.Text(names[i], 12.5, UI.Fg, FontWeights.SemiBold);
-            tabLabels[i].Margin = new Thickness(7, 0, 0, 0);
-            content.Children.Add(tabLabels[i]);
-            tabButtons[i] = UI.Button(content, 0, 28, 14, Brushes.Transparent, delegate { SelectTab(index); });
-            tabButtons[i].Margin = new Thickness(0, 0, 2, 0);
-            // Resting the mouse on a tab for a moment opens it; no click needed.
-            tabButtons[i].MouseEnter += delegate
+            tabInk[i] = new SolidColorBrush(TabDim);
+            var stack = new StackPanel { Orientation = Orientation.Vertical, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center, IsHitTestVisible = false };
+            var icon = UI.Icon(glyphs[i], 16, tabInk[i]);
+            icon.HorizontalAlignment = HorizontalAlignment.Center;
+            stack.Children.Add(icon);
+            var glow = new System.Windows.Shapes.Ellipse { Width = 30, Height = 30, Fill = TabGlowBrush, Opacity = 0, IsHitTestVisible = false };
+            var holder = new Grid();
+            holder.Children.Add(glow);
+            holder.Children.Add(stack);
+            var press = new ScaleTransform(1, 1);
+            stack.RenderTransform = press;
+            stack.RenderTransformOrigin = new Point(0.5, 0.5);
+            var cell = new Border { Width = TabW, Height = TabH, Background = Brushes.Transparent, Cursor = Cursors.Hand, Child = holder, CornerRadius = new CornerRadius(TabH / 2), ToolTip = names[i] };
+            cell.MouseEnter += delegate
             {
-                tabHoverTimer.Stop();
-                if (index == tab) return;
-                tabHoverTarget = index;
-                tabHoverTimer.Start();
+                glow.BeginAnimation(OpacityProperty, Anim(1, 220, new CubicEase { EasingMode = EasingMode.EaseOut }, 0));
+                if (index != tab) InkTo(index, TabHover);
             };
-            tabButtons[i].MouseLeave += delegate { if (tabHoverTarget == index) tabHoverTimer.Stop(); };
-            tabs.Children.Add(tabButtons[i]);
+            cell.MouseLeave += delegate
+            {
+                glow.BeginAnimation(OpacityProperty, Anim(0, 300, new CubicEase { EasingMode = EasingMode.EaseOut }, 0));
+                if (index != tab) InkTo(index, TabDim);
+                PressTo(press, 1, 420);
+            };
+            cell.MouseLeftButtonDown += (s, e) => { e.Handled = true; PressTo(press, 0.9, 200); };
+            cell.MouseLeftButtonUp += (s, e) => { e.Handled = true; PressTo(press, 1, 520); SelectTab(index); };
+            tabButtons[i] = cell;
+            row.Children.Add(cell);
         }
-        bar.Children.Add(UI.At(tabs, 0));
+        tabTrack.Children.Add(row);
+        if (TabLensEffect.Available && !Perf.Off("NOLENS"))
+        {
+            tabFx = new TabLensEffect { Size = new Point(tabTrack.Width, trackH), CapX = TabPad + TabEdge, CapY = TabPad, CapW = TabW, CapH = TabH, Strength = 1 };
+            tabTrack.Effect = tabFx;
+        }
+        tabTrack.CacheMode = Cached();
+        bar.Children.Add(UI.At(tabTrack, 0));
+
         privacyLabel = UI.Text("", 12, UI.Orange, FontWeights.SemiBold);
-        privacyLabel.Margin = new Thickness(0, 0, 12, 0);
+        privacyLabel.Margin = new Thickness(8, 0, 10, 0);
         privacyLabel.HorizontalAlignment = HorizontalAlignment.Right;
-        privacyLabel.MaxWidth = 150;
-        bar.Children.Add(UI.At(privacyLabel, 0));
+        privacyLabel.MaxWidth = 110;
+        bar.Children.Add(UI.At(privacyLabel, 1));
+        var right = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        miniRing = new RingView { Width = 15, Height = 15, Thickness = 2, Fill = RenderOrange, VerticalAlignment = VerticalAlignment.Center };
+        miniRingText = UI.Text("", 11.5, UI.Fg, FontWeights.SemiBold);
+        miniRingText.Margin = new Thickness(5, 0, 10, 0);
+        miniRingPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed };
+        miniRingPanel.Children.Add(miniRing);
+        miniRingPanel.Children.Add(miniRingText);
+        right.Children.Add(miniRingPanel);
         batteryLabel = UI.Text("", 12.5, UI.Dim, FontWeights.SemiBold);
         batteryLabel.Margin = new Thickness(0, 0, 4, 0);
-        bar.Children.Add(UI.At(batteryLabel, 1));
+        right.Children.Add(batteryLabel);
+        bar.Children.Add(UI.At(right, 2));
         panel.Children.Add(UI.Row(bar, 0));
 
         var host = new Grid { Margin = new Thickness(0, 10, 0, 0) };
         pages[TabMedia] = BuildMedia();
+        artBig.CacheMode = Cached();
         pages[TabControls] = BuildControls();
         pages[TabStats] = BuildStats();
         pages[TabClipboard] = BuildClipboard();
@@ -2599,12 +3298,15 @@ class Island : Window
         foreach (var p in pages)
         {
             p.RenderTransform = new TranslateTransform();
+            if (p != pages[TabMedia]) p.CacheMode = Cached();
             host.Children.Add(p);
         }
         panel.Children.Add(UI.Row(host, 1));
         expandedLayer.Children.Add(panel);
-        SelectTab(playing ? TabMedia : TabControls);
+        tab = playing ? TabMedia : TabControls;
+        SelectTab(tab);
         UpdateMediaUi();
+        UpdateRing();
     }
 
     void SelectTab(int index)
@@ -2613,13 +3315,8 @@ class Island : Window
         int from = tab;
         tab = index;
         for (int i = 0; i < TabCount; i++)
-        {
-            tabButtons[i].Background = i == index ? UI.GlassFill(Color.FromRgb(0x8A, 0x8A, 0x9A), 0x40) : Brushes.Transparent;
-            tabButtons[i].BorderBrush = i == index ? UI.Specular : null;
-            tabButtons[i].BorderThickness = new Thickness(i == index ? 1 : 0);
-            tabLabels[i].Visibility = i == index ? Visibility.Visible : Visibility.Collapsed;
-            pages[i].Visibility = i == index ? Visibility.Visible : Visibility.Collapsed;
-        }
+            pages[i].Visibility = i == index ? Visibility.Visible : Visibility.Hidden;    // Hidden keeps them laid out, so switching is cheap
+        MoveCapsule(from, index);
         if (from != index)
         {
             // Slide in a little from the side the tab sits on, with a quick fade.
@@ -2630,12 +3327,117 @@ class Island : Window
             t.X = index > from ? 14 : -14;
             t.BeginAnimation(TranslateTransform.XProperty, Anim(0, 460, Spring.Soft, 0));
         }
-        if (index == TabClipboard) RenderClips();
-        if (index == TabShelf) RenderShelf();
+        // The clipboard and shelf lists can take a moment to rebuild; let the capsule land first.
+        Action heavy = delegate
+        {
+            if (tab != index) return;
+            if (index == TabClipboard) RenderClips();
+            if (index == TabShelf) RenderShelf();
+        };
+        if (capRunning) afterGlide = heavy; else heavy();
         if (index == TabTimer) RenderTimer();
         if (index == TabMedia) UpdateProgress();
         UpdateSensors();
         UpdateTickRate();
+    }
+
+    // ---------------------------------------------------------------- CreatorHUD: tab capsule
+
+    // A rendered snapshot of an element, at screen resolution. When only the glass behind changes,
+    // WPF lays the snapshot over it instead of drawing every text, icon and effect again.
+    BitmapCache Cached()
+    {
+        double scale = 1;
+        try { var src = PresentationSource.FromVisual(this); if (src != null) scale = src.CompositionTarget.TransformToDevice.M11; } catch (Exception) { }
+        return new BitmapCache { RenderAtScale = scale, SnapsToDevicePixels = true };
+    }
+
+    static readonly Brush TabGlowBrush = MakeTabGlow();
+    static Brush MakeTabGlow()
+    {
+        var b = new RadialGradientBrush();
+        b.GradientStops.Add(new GradientStop(Color.FromArgb(0x48, 255, 255, 255), 0));
+        b.GradientStops.Add(new GradientStop(Color.FromArgb(0x18, 255, 255, 255), 0.55));
+        b.GradientStops.Add(new GradientStop(Color.FromArgb(0, 255, 255, 255), 1));
+        b.Freeze();
+        return b;
+    }
+
+    bool gliding, capRunning;
+    double capX = TabPad + TabEdge, capV, capTarget = TabPad + TabEdge;
+    TimeSpan capLast;
+    Action afterGlide;
+
+    // The capsule is a damped spring stepped once per drawn frame (never more than 1/60 s at a time),
+    // so if the app pauses for a moment it carries on from where it was instead of skipping ahead.
+    // It stretches with its speed, like a drop.
+    void CapsuleFrame(object sender, EventArgs e)
+    {
+        var now = ((RenderingEventArgs)e).RenderingTime;
+        if (now == capLast) return;    // the same frame reported twice
+        double dt = capLast == TimeSpan.Zero ? 1.0 / 60 : Math.Min(1.0 / 60, Math.Max(0.001, (now - capLast).TotalSeconds));
+        capLast = now;
+        const double omega = 17, zeta = 0.7;
+        double a = -omega * omega * (capX - capTarget) - 2 * zeta * omega * capV;
+        capV += a * dt;
+        capX += capV * dt;
+        tabFx.CapX = capX;
+        tabFx.Stretch = Math.Min(1, Math.Abs(capV) / 850);
+        if (Math.Abs(capX - capTarget) < 0.08 && Math.Abs(capV) < 4)
+        {
+            capX = capTarget; capV = 0;
+            tabFx.CapX = capX; tabFx.Stretch = 0;
+            CompositionTarget.Rendering -= CapsuleFrame;
+            capRunning = false;
+            gliding = false;
+            UpdateGlassRate();
+            var next = afterGlide;
+            afterGlide = null;
+            if (next != null) next();
+        }
+    }
+
+    static readonly Color TabDim = Color.FromRgb(0x9A, 0x9A, 0xA6), TabHover = Color.FromRgb(0xDA, 0xDA, 0xE2), TabOn = Color.FromRgb(0xF5, 0xF5, 0xF7);
+
+    void InkTo(int i, Color c)
+    {
+        if (tabInk[i] == null) return;
+        var a = new ColorAnimation(c, TimeSpan.FromMilliseconds(220)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+        tabInk[i].BeginAnimation(SolidColorBrush.ColorProperty, a);
+    }
+
+    void PressTo(ScaleTransform t, double to, double ms)
+    {
+        IEasingFunction ease = to < 1 ? (IEasingFunction)new CubicEase { EasingMode = EasingMode.EaseOut } : Spring.Bouncy;
+        t.BeginAnimation(ScaleTransform.ScaleXProperty, Anim(to, ms, ease, 0));
+        t.BeginAnimation(ScaleTransform.ScaleYProperty, Anim(to, ms, ease, 0));
+    }
+
+    // The capsule glides with a spring, stretching like a drop while it travels, then settles.
+    void MoveCapsule(int from, int to)
+    {
+        for (int i = 0; i < TabCount; i++)
+            if (tabButtons[i] != null) InkTo(i, i == to ? TabOn : tabButtons[i].IsMouseOver ? TabHover : TabDim);
+        double x = TabPad + TabEdge + to * TabW;
+        int dist = Math.Abs(to - from);
+        double ms = 460 + 35 * dist;
+        if (from != to && tabFx != null && !gliding) { gliding = true; UpdateGlassRate(); }
+        if (tabFx != null)
+        {
+            capTarget = x;
+            if (from == to && !capRunning) { capX = x; capV = 0; tabFx.CapX = x; tabFx.Stretch = 0; return; }
+            if (!capRunning)
+            {
+                capRunning = true;
+                capLast = TimeSpan.Zero;
+                CompositionTarget.Rendering += CapsuleFrame;
+            }
+        }
+        else if (capsuleFallback != null)
+        {
+            if (from == to) { capsuleShift.BeginAnimation(TranslateTransform.XProperty, null); capsuleShift.X = x - TabPad - TabEdge; return; }
+            capsuleShift.BeginAnimation(TranslateTransform.XProperty, Anim(x - TabPad - TabEdge, ms, Spring.Soft, 0));
+        }
     }
 
     // ---------------------------------------------------------------- Media
@@ -2656,16 +3458,78 @@ class Island : Window
         info.Children.Add(mediaTitle);
         info.Children.Add(mediaArtist);
 
-        progressRow = new Grid { Margin = new Thickness(0, 14, 0, 0) };
+        progressRow = new Grid { Margin = new Thickness(0, 8, 0, 0) };
         progressRow.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         progressRow.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        var track = new Grid { Height = 5 };
-        track.Children.Add(new Border { Background = UI.B("#2EFFFFFF"), CornerRadius = new CornerRadius(2.5) });
-        progressFill = new Border { Background = UI.Fg, CornerRadius = new CornerRadius(2.5), HorizontalAlignment = HorizontalAlignment.Left, Width = 0 };
+        var track = new Grid { Height = 5, VerticalAlignment = VerticalAlignment.Center };
+        track.Children.Add(new Border { Background = UI.B("#2EFFFFFF"), CornerRadius = new CornerRadius(4) });
+        progressFill = new Border { Background = UI.Fg, CornerRadius = new CornerRadius(4), HorizontalAlignment = HorizontalAlignment.Left, Width = 0 };
         track.Children.Add(progressFill);
-        progressRow.Children.Add(UI.Row(track, 0));
+        // CreatorHUD: the bar is a scrubber. It follows the mouse at once and, on release, asks the
+        // playing app (Spotify, a browser on YouTube...) to jump there through Windows' own media
+        // controls, the same channel the volume-key media pop-up uses.
+        scrubTrack = track;
+        track.SizeChanged += (o, e) => { if (e.WidthChanged) UpdateProgress(); };
+        scrub = new Grid { Height = 18, Background = Brushes.Transparent };
+        scrub.Children.Add(track);
+        // A small knob rides the end of the fill and swells under the mouse.
+        knob = new System.Windows.Shapes.Ellipse
+        {
+            Width = 16, Height = 16, Fill = UI.Fg, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false, RenderTransformOrigin = new Point(0.5, 0.5),
+        };
+        var knobMoves = new TransformGroup();
+        knobMoves.Children.Add(knobScale);
+        knobMoves.Children.Add(knobShift);
+        knob.RenderTransform = knobMoves;
+        var shade = new RadialGradientBrush();
+        shade.GradientStops.Add(new GradientStop(Color.FromArgb(0x70, 0, 0, 0), 0.55));
+        shade.GradientStops.Add(new GradientStop(Color.FromArgb(0, 0, 0, 0), 1));
+        shade.Freeze();
+        scrub.Children.Add(new System.Windows.Shapes.Ellipse
+        {
+            Width = 24, Height = 24, Fill = shade, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(-4, 0, 0, 0), IsHitTestVisible = false, RenderTransformOrigin = new Point(0.5, 0.5), RenderTransform = knobMoves,
+        });
+        scrub.Children.Add(knob);
+        progressFill.SizeChanged += delegate { knobShift.X = progressFill.ActualWidth - 8; };
+        scrub.MouseEnter += delegate
+        {
+            bool ok = SeekAllowed();
+            scrub.Cursor = ok ? Cursors.Hand : Cursors.Arrow;
+            scrub.ToolTip = ok ? null : "This app doesn't allow jumping around";
+            if (ok) KnobTo(0.78);
+        };
+        scrub.MouseLeave += delegate { if (!scrubbing) KnobTo(0.62); };
+        scrub.MouseLeftButtonDown += (o, e) =>
+        {
+            e.Handled = true;
+            if (!SeekAllowed()) return;
+            try
+            {
+                var tl = session.GetTimelineProperties();
+                scrubStart = tl.StartTime;
+                scrubLen = tl.EndTime - tl.StartTime;
+            }
+            catch (Exception) { return; }
+            if (scrubLen.TotalSeconds < 1) return;
+            scrubbing = true;
+            scrub.CaptureMouse();
+            ScrubTo(e.GetPosition(scrubTrack).X);
+        };
+        scrub.MouseMove += (o, e) => { if (scrubbing) ScrubTo(e.GetPosition(scrubTrack).X); };
+        scrub.MouseLeftButtonUp += (o, e) => { if (!scrubbing) return; e.Handled = true; scrub.ReleaseMouseCapture(); };
+        scrub.LostMouseCapture += delegate
+        {
+            if (!scrubbing) return;
+            scrubbing = false;
+            CommitSeek();
+            if (!scrub.IsMouseOver) KnobTo(0.62);
+        };
+        new Jelly(scrub, false);
+        progressRow.Children.Add(UI.Row(scrub, 0));
         var times = UI.Columns(UI.Star, UI.Auto);
-        times.Margin = new Thickness(0, 5, 0, 0);
+        times.Margin = new Thickness(0, -1, 0, 0);
         posText = UI.Text("", 11, UI.Dim, FontWeights.Normal);
         durText = UI.Text("", 11, UI.Dim, FontWeights.Normal);
         times.Children.Add(UI.At(posText, 0));
@@ -2695,9 +3559,63 @@ class Island : Window
         UpdateProgress();
     }
 
+    // ---------------------------------------------------------------- CreatorHUD: scrubbing
+
+    Grid scrub, scrubTrack;
+    System.Windows.Shapes.Ellipse knob;
+    readonly ScaleTransform knobScale = new ScaleTransform(0.62, 0.62);
+    readonly TranslateTransform knobShift = new TranslateTransform();
+
+    void KnobTo(double s)
+    {
+        knobScale.BeginAnimation(ScaleTransform.ScaleXProperty, Anim(s, 420, Spring.Bouncy, 0));
+        knobScale.BeginAnimation(ScaleTransform.ScaleYProperty, Anim(s, 420, Spring.Bouncy, 0));
+    }
+    bool scrubbing;
+    double scrubFrac;
+    TimeSpan scrubStart, scrubLen, seekTarget;
+    DateTime seekAt, seekHoldUntil;
+
+    bool SeekAllowed()
+    {
+        try { return session != null && title != null && session.GetPlaybackInfo().Controls.IsPlaybackPositionEnabled; }
+        catch (Exception) { return false; }
+    }
+
+    void ScrubTo(double x)
+    {
+        double w = Math.Max(1, scrubTrack.ActualWidth);
+        scrubFrac = Math.Max(0, Math.Min(1, x / w));
+        progressFill.BeginAnimation(WidthProperty, null);
+        progressFill.Width = w * scrubFrac;
+        var pos = TimeSpan.FromSeconds(scrubLen.TotalSeconds * scrubFrac);
+        posText.Text = Format(pos);
+        durText.Text = "-" + Format(scrubLen - pos);
+    }
+
+    // The app takes a moment to report its new position, so the bar holds the target meanwhile
+    // instead of snapping back.
+    void CommitSeek()
+    {
+        seekTarget = TimeSpan.FromSeconds(scrubLen.TotalSeconds * scrubFrac);
+        seekAt = DateTime.Now;
+        seekHoldUntil = seekAt.AddSeconds(1.6);
+        Seek(scrubStart + seekTarget);
+    }
+
+    async void Seek(TimeSpan to)
+    {
+        try
+        {
+            var s = session;
+            if (s != null && !await s.TryChangePlaybackPositionAsync(to.Ticks)) Store.Log("seek refused by " + appName);
+        }
+        catch (Exception ex) { Store.Log("seek: " + ex.Message); }
+    }
+
     void UpdateProgress()
     {
-        if (!built) return;
+        if (!built || scrubbing) return;
         var s = session;
         TimeSpan pos = TimeSpan.Zero, len = TimeSpan.Zero;
         try
@@ -2712,11 +3630,36 @@ class Island : Window
         }
         catch (Exception) { }
         if (len.TotalSeconds < 1) { progressRow.Visibility = Visibility.Collapsed; return; }
+        if (DateTime.Now < seekHoldUntil) pos = seekTarget + (playing ? DateTime.Now - seekAt : TimeSpan.Zero);
         if (pos > len) pos = len;
         if (pos < TimeSpan.Zero) pos = TimeSpan.Zero;
         progressRow.Visibility = Visibility.Visible;
-        double w = Math.Max(0, ((FrameworkElement)progressFill.Parent).ActualWidth) * pos.TotalSeconds / len.TotalSeconds;
-        progressFill.BeginAnimation(WidthProperty, Anim(w, 900, null, 0));
+        // CreatorHUD: the bar keeps pace with the song instead of chasing it. Each tick it starts exactly
+        // where the song is and moves at the song's own speed until the next tick, so it is always in the
+        // right place. A new song or a jump glides there quickly instead.
+        double full = Math.Max(0, scrubTrack.ActualWidth), secs = len.TotalSeconds;
+        double w = full * pos.TotalSeconds / secs;
+        double cur = (double)progressFill.GetValue(WidthProperty);
+        bool jump = double.IsNaN(cur) || Math.Abs(cur - w) > Math.Max(3, full * 2.5 / secs);
+        if (jump)
+        {
+            double lead = playing ? full * 0.26 / secs : 0;
+            progressFill.BeginAnimation(WidthProperty, Anim(Math.Min(full, w + lead), 260, new CubicEase { EasingMode = EasingMode.EaseOut }, 0));
+        }
+        else if (playing)
+        {
+            double to = Math.Min(full, full * (pos.TotalSeconds + 1.05) / secs);
+            var a = new DoubleAnimation(w, to, TimeSpan.FromMilliseconds(1050));
+            // Only as many frames as there are pixels to move: a long song creeps a few pixels a second.
+            double devicePxPerSec = full * 1.5 / secs;
+            Timeline.SetDesiredFrameRate(a, (int)Math.Max(4, Math.Min(30, Math.Ceiling(devicePxPerSec * 2))));
+            progressFill.BeginAnimation(WidthProperty, a);
+        }
+        else
+        {
+            progressFill.BeginAnimation(WidthProperty, null);
+            progressFill.Width = w;
+        }
         posText.Text = Format(pos);
         durText.Text = "-" + Format(len - pos);
     }
@@ -2776,7 +3719,7 @@ class Island : Window
         var parts = (Tuple<Border, TextBlock>)tile.Tag;
         parts.Item1.Background = state == 1 ? onColor : UI.B("#2EFFFFFF");
         parts.Item2.Text = state < 0 ? "Not available" : state == 1 ? "On" : "Off";
-        tile.Background = state == 1 ? UI.B("#24FFFFFF") : UI.Card;
+        tile.Background = state == 1 ? UI.CardOn : tile.IsMouseOver ? UI.CardHover : UI.Card;
         tile.Opacity = state < 0 ? 0.45 : 1;
     }
 
@@ -3019,7 +3962,7 @@ class Island : Window
                     {
                         var ms = new MemoryStream();
                         using (var ras = await props.Thumbnail.OpenReadAsync())
-                        using (var st = ras.AsStreamForRead())
+                        using (var st = WinRtAwait.ToMemoryStream(ras))
                             st.CopyTo(ms);
                         ms.Position = 0;
                         var bi = new BitmapImage();
@@ -3706,11 +4649,11 @@ class Island : Window
         customLabel.TextAlignment = TextAlignment.Center;
         custom.Children.Add(customLabel);
         custom.Children.Add(Pad(UI.Button(UI.Icon("", 11, UI.Fg), 28, 28, 14, UI.Card, delegate { customMinutes = Math.Min(600, customMinutes + (customMinutes >= 10 ? 5 : 1)); RenderTimer(); })));
-        custom.Children.Add(Pad(UI.Button(Centered(UI.Text("Start", 12, UI.Fg, FontWeights.SemiBold)), 56, 28, 14, UI.Orange, delegate { StartTimer(customMinutes); })));
+        custom.Children.Add(Pad(UI.TintButton(Centered(UI.Text("Start", 12, UI.Fg, FontWeights.SemiBold)), 56, 28, 14, Color.FromRgb(0xFF, 0x9F, 0x0A), delegate { StartTimer(customMinutes); })));
         t.Children.Add(custom);
         var tControls = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 0) };
         timerPauseLabel = UI.Text("Pause", 12, UI.Fg, FontWeights.SemiBold);
-        tControls.Children.Add(Pad(UI.Button(Centered(UI.Text("Focus 25", 12, UI.Fg, FontWeights.SemiBold)), 78, 28, 14, UI.Purple, StartFocus)));
+        tControls.Children.Add(Pad(UI.TintButton(Centered(UI.Text("Focus 25", 12, UI.Fg, FontWeights.SemiBold)), 78, 28, 14, Color.FromRgb(0x9F, 0x7B, 0xFF), StartFocus)));
         tControls.Children.Add(Pad(UI.Button(Centered(timerPauseLabel), 72, 28, 14, UI.Card, PauseTimer)));
         tControls.Children.Add(Pad(UI.Button(Centered(UI.Text("Cancel", 12, UI.Fg, FontWeights.SemiBold)), 72, 28, 14, UI.Card, CancelTimer)));
         t.Children.Add(tControls);
@@ -3724,7 +4667,7 @@ class Island : Window
         w.Children.Add(swText);
         var wControls = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 10, 0, 0) };
         swStartLabel = UI.Text("Start", 12, UI.Fg, FontWeights.SemiBold);
-        wControls.Children.Add(Pad(UI.Button(Centered(swStartLabel), 66, 28, 14, UI.Green, delegate
+        wControls.Children.Add(Pad(UI.TintButton(Centered(swStartLabel), 66, 28, 14, Color.FromRgb(0x30, 0xD1, 0x58), delegate
         {
             if (stopwatch.IsRunning) stopwatch.Stop(); else stopwatch.Start();
             RenderTimer();
