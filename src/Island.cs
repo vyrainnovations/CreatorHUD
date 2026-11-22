@@ -37,6 +37,7 @@ using RadioState = Windows.Devices.Radios.RadioState;
 static class Native
 {
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("kernel32.dll")] public static extern ulong GetTickCount64();
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr h);
@@ -1479,6 +1480,10 @@ class Island : Window
     MediaManager mediaManager;
     MediaSession session;
     bool playing;
+    // CreatorHUD: true when what's playing is music (Spotify and the like), false for videos (YouTube,
+    // Instagram, Netflix...). Videos keep the resting island quiet; the open panel still has their controls.
+    bool musicSource;
+    bool PillMusic { get { return playing && musicSource; } }
     string mediaKey, title, artist, appName;
     ImageSource artwork;
     Color tint = Color.FromRgb(0x4A, 0x6C, 0xFF);
@@ -1887,7 +1892,7 @@ class Island : Window
         FadeTo(baseLayer, solid ? 1 : BaseUnderGlass, 200);
         rimOverlay.BorderBrush = line ? RimPlain : rimFancy;
         FadeTo(rimOverlay, 1, 260);
-        FadeTo(aurora, !open && !line && playing && artwork != null ? 0.55 : 0, 400);
+        FadeTo(aurora, !open && !line && PillMusic && artwork != null ? 0.55 : 0, 400);
     }
 
     // The tint follows what is behind: light over dark wallpaper, darker over bright windows so white
@@ -2279,6 +2284,7 @@ class Island : Window
 
     void OnLoaded(object sender, EventArgs e)
     {
+        StartSession();
         LoadClips();
         LoadShelf();
         InitMedia();
@@ -2365,7 +2371,10 @@ class Island : Window
 
     void Cleanup()
     {
-        try { if (clipSaveTimer != null && clipSaveTimer.IsEnabled) SaveClips(); } catch (Exception) { }    // a pending save, before quitting
+        // CreatorHUD: quitting from the tray (or Windows shutting down) ends the session: the shelf and the
+        // clipboard list start fresh next time.
+        if (clipSaveTimer != null) clipSaveTimer.Stop();
+        WipeSessionData();
         try
         {
             Native.UnregisterHotKey(hwnd, 1);
@@ -2627,7 +2636,7 @@ class Island : Window
             FadeTo(rimOverlay, 1, 300);
             FadeTo(aurora, 0.55, 400);
             ShowLayer(collapsedLayer, 140);
-            if (playing && !timerRunning && !stopwatch.IsRunning && !hidden) StartBars();
+            if (PillMusic && !timerRunning && !stopwatch.IsRunning && !hidden) StartBars();
         }
         Action done = delegate
         {
@@ -2666,7 +2675,7 @@ class Island : Window
             Show();
             Native.SetWindowPos(hwnd, new IntPtr(-1), 0, 0, 0, 0, 0x13);    // HWND_TOPMOST, no move/size/activate
             UpdateGlassRate();
-            if (mode == Mode.Collapsed && playing && !lineMode && !timerRunning && !stopwatch.IsRunning) StartBars();
+            if (mode == Mode.Collapsed && PillMusic && !lineMode && !timerRunning && !stopwatch.IsRunning) StartBars();
         }
 
         if (pinnedOpen && mode == Mode.Expanded && (DateTime.Now - pinnedAt).TotalSeconds > 12 && !CursorOverIsland())
@@ -2721,7 +2730,7 @@ class Island : Window
         UpdateCollapsed();
     }
 
-    bool HasStatus() { return timerRunning || stopwatch.IsRunning || playing || RenderLive || (onAc && batteryPercent >= 0 && batteryPercent < 100 && charging); }
+    bool HasStatus() { return timerRunning || stopwatch.IsRunning || PillMusic || RenderLive || (onAc && batteryPercent >= 0 && batteryPercent < 100 && charging); }
 
     bool RenderLive { get { return render.Rendering || (DateTime.Now - renderEndedAt).TotalSeconds < 6; } }
 
@@ -2747,7 +2756,7 @@ class Island : Window
             pillIcon.Text = ClockGlyph; pillIcon.Foreground = UI.Fg; pillIcon.Visibility = Visibility.Visible;
             pillText.Text = Format(stopwatch.Elapsed); pillText.Foreground = UI.Fg; pillText.Visibility = Visibility.Visible;
         }
-        else if (playing)
+        else if (PillMusic)
         {
             if (artwork != null) { pillArt.Background = new ImageBrush(artwork) { Stretch = Stretch.UniformToFill }; pillArt.Visibility = Visibility.Visible; }
             else { pillIcon.Text = ""; pillIcon.Foreground = UI.Fg; pillIcon.Visibility = Visibility.Visible; }
@@ -2770,8 +2779,8 @@ class Island : Window
         }
 
         pillBadge.Visibility = pillIcon.Visibility;
-        if (!playing || timerRunning || stopwatch.IsRunning) StopBars();
-        if (mode == Mode.Collapsed && (wasLine != !HasStatus() || (playing && !barsRunning && !timerRunning && !stopwatch.IsRunning))) ApplyCollapsed(true);
+        if (!PillMusic || timerRunning || stopwatch.IsRunning) StopBars();
+        if (mode == Mode.Collapsed && (wasLine != !HasStatus() || (PillMusic && !barsRunning && !timerRunning && !stopwatch.IsRunning))) ApplyCollapsed(true);
     }
 
     void StartBars()
@@ -3320,6 +3329,8 @@ class Island : Window
             if (p != pages[TabMedia]) p.CacheMode = Cached();
             host.Children.Add(p);
         }
+        // CreatorHUD: fill the clipboard and shelf pages in a quiet moment, so they're ready before you get there.
+        Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, (Action)delegate { if (!shelfShown) RenderShelf(); if (!clipsShown) RenderClips(); });
         panel.Children.Add(UI.Row(host, 1));
         expandedLayer.Children.Add(panel);
         tab = playing ? TabMedia : TabControls;
@@ -3347,6 +3358,8 @@ class Island : Window
             t.BeginAnimation(TranslateTransform.XProperty, Anim(0, 460, Spring.Soft, 0));
         }
         // The clipboard and shelf lists can take a moment to rebuild; let the capsule land first.
+        if (index == TabShelf && !shelfShown) RenderShelf();
+        if (index == TabClipboard && !clipsShown) RenderClips();
         Action heavy = delegate
         {
             if (tab != index) return;
@@ -3930,6 +3943,25 @@ class Island : Window
         RefreshMedia();
     }
 
+    // Is this session music (show the pill and visualizer at rest) or a video (stay quiet)?
+    // Browsers call everything "Music", YouTube Shorts included, so for them and for video apps only a
+    // track with an album counts (YouTube Music, Spotify Web and SoundCloud set one; YouTube doesn't).
+    static readonly string[] MusicApps = { "spotify", "music.youtube", "youtube music", "ytmdesktop", "zunemusic", "music.ui",
+        "applemusic", "itunes", "tidal", "deezer", "amazonmusic", "amazon music", "soundcloud", "pandora", "musicbee",
+        "foobar", "aimp", "winamp", "audacious", "qobuz", "anghami", "jiosaavn", "gaana", "wynk", "audiomack" };
+    static readonly string[] VideoHosts = { "chrome", "msedge", "edge", "firefox", "308046b0af4a39cb", "brave", "opera",
+        "vivaldi", "arc", "thebrowsercompany", "zen", "instagram", "youtube", "netflix", "primevideo", "disney", "tiktok",
+        "facebook", "twitch", "hotstar", "vlc", "mpc", "potplayer", "movies", "zunevideo", "screensketch", "clipchamp" };
+
+    static bool IsMusic(string id, Windows.Media.MediaPlaybackType? type, string album)
+    {
+        string a = (id ?? "").ToLowerInvariant();
+        if (MusicApps.Any(m => a.Contains(m))) return true;
+        bool hasAlbum = !string.IsNullOrWhiteSpace(album);
+        if (VideoHosts.Any(v => a.Contains(v))) return hasAlbum && type != Windows.Media.MediaPlaybackType.Video;
+        return type == Windows.Media.MediaPlaybackType.Music;
+    }
+
     static string PrettyApp(string id)
     {
         if (string.IsNullOrEmpty(id)) return "";
@@ -3962,7 +3994,7 @@ class Island : Window
         int version = ++mediaVersion;
         var s = session;
         string newTitle = null, newArtist = null;
-        bool isPlaying = false;
+        bool isPlaying = false, newMusic = false;
         ImageSource art = artwork;
         try
         {
@@ -3998,6 +4030,7 @@ class Island : Window
                     try { SetTint(art != null ? AverageColor((BitmapSource)art) : Color.FromRgb(0x4A, 0x6C, 0xFF)); } catch (Exception) { }
                 }
                 appName = PrettyApp(s.SourceAppUserModelId);
+                newMusic = IsMusic(s.SourceAppUserModelId, props.PlaybackType, props.AlbumTitle);
             }
         }
         catch (Exception ex) { Store.Log("media read: " + ex.Message); }
@@ -4006,6 +4039,7 @@ class Island : Window
         if (s == null || string.IsNullOrEmpty(newTitle)) { newTitle = null; newArtist = null; art = null; mediaKey = null; isPlaying = false; appName = null; }
         artwork = art;
         playing = isPlaying;
+        musicSource = newMusic;
         title = newTitle;
         artist = newArtist;
         UpdateMediaUi();
@@ -4181,15 +4215,9 @@ class Island : Window
         catch (Exception) { return null; }
     }
 
+    // CreatorHUD: nothing is dropped any more; the list only empties on a restart or when you clear it.
     void TrimClips()
     {
-        while (clips.Count > 30)
-        {
-            int i = clips.FindLastIndex(c => !c.Pinned);
-            if (i < 0) break;
-            DeleteClipFile(clips[i]);
-            clips.RemoveAt(i);
-        }
         ClipsChanged();
         if (mode == Mode.Expanded && tab == TabClipboard) RenderClips();
     }
@@ -4197,6 +4225,7 @@ class Island : Window
     void RenderClips()
     {
         if (!built) return;
+        clipsShown = true;
         clipList.Children.Clear();
         clipCount.Text = (clips.Count == 0 ? "" : clips.Count + (clips.Count == 1 ? " item" : " items") + "   ") + (pickerKeys.Length > 0 ? pickerKeys + PickerHint : "");
         if (clips.Count == 0)
@@ -4207,9 +4236,17 @@ class Island : Window
             clipList.Children.Add(empty);
             return;
         }
-        foreach (var c in clips.Where(x => x.Pinned).Concat(clips.Where(x => !x.Pinned)))
+        var ordered = clips.Where(x => x.Pinned).Concat(clips.Where(x => !x.Pinned)).ToList();
+        AddClipCards(ordered, 0);
+    }
+
+    // Shows clips in batches of 60, with a "Show more" card at the end, so a long list never stutters.
+    void AddClipCards(List<Clip> ordered, int start)
+    {
+        int end = Math.Min(ordered.Count, start + 60);
+        for (int k = start; k < end; k++)
         {
-            var clip = c;
+            var clip = ordered[k];
             var row = UI.Columns(UI.Star, UI.Auto, UI.Auto);
             UIElement body;
             if (clip.IsImage) body = new Image { Source = clip.Thumb, Height = 56, HorizontalAlignment = HorizontalAlignment.Left, Stretch = Stretch.Uniform };
@@ -4229,6 +4266,15 @@ class Island : Window
             card.BorderBrush = UI.Rim;
             clipList.Children.Add(card);
         }
+        if (end < ordered.Count)
+        {
+            var label = UI.Text("Show " + Math.Min(60, ordered.Count - end) + " more", 12, UI.Fg, FontWeights.SemiBold);
+            label.HorizontalAlignment = HorizontalAlignment.Center;
+            Border more = null;
+            more = UI.Button(label, 0, 30, 15, UI.Card, delegate { clipList.Children.Remove(more); AddClipCards(ordered, end); });
+            more.Margin = new Thickness(0, 2, 0, 6);
+            clipList.Children.Add(more);
+        }
     }
 
     void CopyBack(Clip clip)
@@ -4241,7 +4287,7 @@ class Island : Window
                 var bi = new BitmapImage();
                 bi.BeginInit();
                 bi.CacheOption = BitmapCacheOption.OnLoad;
-                bi.StreamSource = new MemoryStream(clip.Png);
+                bi.StreamSource = new MemoryStream(ClipPng(clip));
                 bi.EndInit();
                 bi.Freeze();
                 Clipboard.SetImage(bi);
@@ -4281,10 +4327,15 @@ class Island : Window
         catch (Exception ex) { Store.Log("copy back: " + ex.Message); }
     }
 
+    static byte[] ClipPng(Clip clip)
+    {
+        return clip.Png ?? File.ReadAllBytes(System.IO.Path.Combine(Store.ImageDir, clip.File));
+    }
+
     void TogglePin(Clip clip)
     {
         clip.Pinned = !clip.Pinned;
-        if (clip.IsImage && clip.Pinned && clip.File == null)
+        if (clip.IsImage && clip.Pinned && clip.File == null && clip.Png != null)
         {
             try
             {
@@ -4310,7 +4361,7 @@ class Island : Window
     DispatcherTimer clipSaveTimer;
     void ClipsChanged()
     {
-        if (clipSaveTimer == null) clipSaveTimer = MakeTimer(1500, delegate { SaveClips(); });
+        if (clipSaveTimer == null) clipSaveTimer = MakeTimer(1500, delegate { SaveClips(); if (built && tab != TabClipboard) RenderClips(); });
         clipSaveTimer.Stop();
         clipSaveTimer.Start();
     }
@@ -4343,6 +4394,7 @@ class Island : Window
                     Directory.CreateDirectory(Store.ImageDir);
                     c.File = Guid.NewGuid().ToString("N") + ".png";
                     File.WriteAllBytes(System.IO.Path.Combine(Store.ImageDir, c.File), c.Png);
+                    c.Png = null;    // on disk now; only the thumbnail stays in memory
                 }
                 catch (Exception) { c.File = null; }
             }
@@ -4363,12 +4415,50 @@ class Island : Window
                     var png = File.ReadAllBytes(System.IO.Path.Combine(Store.ImageDir, s.File));
                     string hash;
                     using (var md5 = MD5.Create()) hash = Convert.ToBase64String(md5.ComputeHash(png));
-                    clips.Add(new Clip { IsImage = true, Png = png, Hash = hash, Thumb = Thumbnail(png), Pinned = s.Pinned ?? true, File = s.File });
+                    clips.Add(new Clip { IsImage = true, Hash = hash, Thumb = Thumbnail(png), Pinned = s.Pinned ?? false, File = s.File });
                 }
                 catch (Exception) { }
             }
-            else if (!string.IsNullOrEmpty(s.Text)) clips.Add(new Clip { Text = s.Text, Pinned = s.Pinned ?? true });
+            else if (!string.IsNullOrEmpty(s.Text)) clips.Add(new Clip { Text = s.Text, Pinned = s.Pinned ?? false });
         }
+    }
+
+    // ---------------------------------------------------------------- CreatorHUD: session lifetime
+
+    // The shelf and clipboard list (pinned items too) last until the PC restarts, you quit CreatorHUD from
+    // the tray, or you clear them. While running they are still saved to disk, so if the app ever crashes
+    // and is opened again, nothing is lost.
+    static string SessionFile { get { return System.IO.Path.Combine(Store.Dir, "session.txt"); } }
+
+    static DateTime BootTime()
+    {
+        try { return DateTime.UtcNow - TimeSpan.FromMilliseconds(Native.GetTickCount64()); }
+        catch (Exception) { return DateTime.MinValue; }
+    }
+
+    void StartSession()
+    {
+        var boot = BootTime();
+        bool same = false;
+        try
+        {
+            if (File.Exists(SessionFile))
+            {
+                var saved = new DateTime(long.Parse(File.ReadAllText(SessionFile).Trim()), DateTimeKind.Utc);
+                same = Math.Abs((saved - boot).TotalMinutes) < 2;
+            }
+        }
+        catch (Exception) { }
+        if (!same) WipeSessionData();
+        try { Directory.CreateDirectory(Store.Dir); File.WriteAllText(SessionFile, boot.Ticks.ToString()); } catch (Exception) { }
+    }
+
+    static void WipeSessionData()
+    {
+        foreach (var f in new[] { Store.ClipsFile, Store.ShelfFile, SessionFile })
+            foreach (var ext in new[] { "", ".bak", ".tmp" })
+                try { if (File.Exists(f + ext)) File.Delete(f + ext); } catch (Exception) { }
+        try { if (Directory.Exists(Store.ImageDir)) Directory.Delete(Store.ImageDir, true); } catch (Exception) { }
     }
 
     // ---------------------------------------------------------------- shelf
@@ -4378,12 +4468,18 @@ class Island : Window
         var page = new Grid();
         page.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         page.RowDefinitions.Add(new RowDefinition { Height = UI.Star });
-        var head = UI.Columns(UI.Auto, UI.Star);
+        var head = UI.Columns(UI.Auto, UI.Star, UI.Auto);
         head.Margin = new Thickness(4, 0, 0, 8);
         head.Children.Add(UI.At(UI.Text("Shelf", 13, UI.Fg, FontWeights.SemiBold), 0));
         var hint = UI.Text("Drag a file out to use it. Pin files, folders or apps to keep them as launchers.", 12, UI.Dim, FontWeights.Normal);
         hint.Margin = new Thickness(10, 0, 0, 0);
+        hint.TextTrimming = TextTrimming.CharacterEllipsis;
         head.Children.Add(UI.At(hint, 1));
+        var clear = UI.Text("Clear unpinned", 12, UI.Fg, FontWeights.SemiBold);
+        clear.Margin = new Thickness(10, 0, 10, 0);
+        var clearBtn = UI.Button(clear, 0, 26, 13, UI.Card, delegate { shelf.RemoveAll(x => !x.Pinned); SaveShelf(); RenderShelf(); });
+        clearBtn.Margin = new Thickness(8, 0, 0, 0);
+        head.Children.Add(UI.At(clearBtn, 2));
         page.Children.Add(UI.Row(head, 0));
         shelfList = new StackPanel();
         page.Children.Add(UI.Row(new ScrollViewer { Content = shelfList, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden }, 1));
@@ -4439,9 +4535,12 @@ class Island : Window
         catch (Exception) { return null; }
     }
 
+    bool shelfShown, clipsShown;
+
     void RenderShelf()
     {
         if (!built) return;
+        shelfShown = true;
         shelfList.Children.Clear();
         if (shelf.Count == 0)
         {
@@ -4654,12 +4753,7 @@ class Island : Window
         }
         catch (Exception ex) { Store.Log("drag out: " + ex.Message); }
         draggingOut = false;
-        if (result != DragDropEffects.None && !item.Pinned)
-        {
-            shelf.Remove(item);
-            SaveShelf();
-            RenderShelf();
-        }
+        // CreatorHUD: the file stays on the shelf after you drag it out, so you can use it again.
         leaveTimer.Stop();
         leaveTimer.Start();
     }

@@ -29,6 +29,8 @@ It's a fork of [WinUltra](https://github.com/Gxmi2006/WinUltra) by **Gamindu Sas
 
 **Resting pill.** When something is live (music, a timer, a render, charging), the line becomes a pill of dark tinted glass with a soft glow taken from the album art. With nothing going on, it's a solid dark grey line. Your mouse only has to get close to it.
 
+**Music vs videos.** When music is playing (Spotify, Apple Music, YouTube Music and the like), the resting island shows the album art and a little audio visualizer. Videos (YouTube, Instagram, Netflix...) leave it resting as a thin line. Hover and the Media tab still has their controls.
+
 **Render bubble (Blender).** While Blender renders, a glass bubble buds off the island with a progress ring and the percentage. It counts frames for animations and samples for stills. When the render finishes, a quiet "Render done" pop-up shows the file name and how long it took. See [Blender add-on](#blender-add-on).
 
 <img src="docs/images/panel-timer.png" width="560" alt="The Timer tab with tinted glass buttons">
@@ -42,6 +44,12 @@ It's a fork of [WinUltra](https://github.com/Gxmi2006/WinUltra) by **Gamindu Sas
 - **Tinted glass buttons, glass cards** and the rest of the inside are styled to match.
 
 <img src="docs/images/notification.png" width="460" alt="A notification in the island">
+
+**Clipboard.** Everything you copy, text and images, lands in the Clipboard tab. Click a card to copy it again, pin the ones you use often, or remove them with ×. Nothing drops off the list on its own, however much you copy. Long lists load in batches of 60 with a **Show more** button so the tab stays smooth, and images are kept on disk with only small previews in memory.
+
+**Shelf.** Drop files, folders or apps onto the island to park them on the shelf, then drag them out wherever you need them. They stay on the shelf after you drag them out, so you can use them again. Pin one to turn it into a one-click launch tile. **Clear unpinned** empties the rest.
+
+**How long the clipboard and shelf last.** Everything on them, pinned items included, stays until you restart your PC, quit CreatorHUD from the tray, or clear it yourself. While the app runs, the lists are also saved to disk, so if CreatorHUD ever crashes and you open it again, nothing is lost.
 
 **Notifications.** Windows notifications appear in the island as soft rounded cards with the app's own icon. This works for Store apps and ordinary programs like Discord.
 
@@ -78,7 +86,7 @@ The clipboard list opens with **Win+Shift+V**, or **Ctrl+Alt+Shift+V** if Window
 ## Privacy
 
 - CreatorHUD has **no network code**. It never connects to the internet.
-- Clipboard history and the shelf stay on your PC, in `%LOCALAPPDATA%\WinUltra`. Your recent copies (last 30) and pinned items survive restarts, and each save keeps a backup copy so nothing is lost if the PC shuts off mid-save. Copies from password managers are skipped.
+- Clipboard history and the shelf stay on your PC, in `%LOCALAPPDATA%\WinUltra`, and only for the current session. They're deleted when you quit CreatorHUD and wiped when Windows restarts. Copies from password managers are skipped.
 - For the glass look it reads the small strip of screen directly behind the island, in memory only. Nothing is saved or sent anywhere.
 - It doesn't read your keyboard.
 
@@ -104,6 +112,21 @@ It compiles `CreatorHUD.exe` with the C# compiler that ships with Windows (.NET 
 | `src/WinRT.cs` | Small helpers so the Windows APIs work without the SDK |
 | `src/Setup.cs` | The setup and settings window |
 | `blender/creator_hud_bridge.py` | The Blender add-on |
+
+---
+
+## Changelog
+
+**1.0.1**
+- Fixed: the island could flash ghost copies of itself for a single frame while opening or closing. It's back on the steady window type.
+- The resting music pill and visualizer only show for music (Spotify, Apple Music, YouTube Music...). YouTube, Instagram and other videos leave the island resting; their controls are still in the Media tab.
+- Clipboard and shelf last for the whole session, pinned items included: no 30-item limit, and shelf files stay after you drag them out. They clear when the PC restarts, when you quit from the tray, or with Clear. Crash-safe saving with a backup copy.
+- The Shelf tab's drop card and the Clipboard list are ready the moment you open them, instead of popping in a moment later.
+- Shelf has a **Clear unpinned** button. Long clipboard lists load in batches for smooth scrolling.
+- New **Blender render progress** toggle in Settings and the tray menu.
+
+**1.0.0**
+- First release: the liquid glass redesign, gliding tab capsule, jelly sliders, song scrubbing, Blender render bubble, recording-friendly glass, new notification cards and performance work.
 
 ---
 
