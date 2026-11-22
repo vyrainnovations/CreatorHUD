@@ -1666,8 +1666,9 @@ class Island : Window
         island.Child = layers;
 
         // The line is too thin to aim at, so an invisible strip around it catches the mouse.
-        hitStrip.Width = 290;     // CreatorHUD: a generous invisible margin, so the mouse only has to get close
-        hitStrip.Height = 34;
+        // CreatorHUD: only above the line (up to the screen edge); no margin to the sides or below.
+        hitStrip.Width = LineW;
+        hitStrip.Height = Gap + LineH;
         hitStrip.VerticalAlignment = VerticalAlignment.Top;
         hitStrip.HorizontalAlignment = HorizontalAlignment.Center;
         hitStrip.Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0));
@@ -2558,8 +2559,8 @@ class Island : Window
         Native.POINT p;
         if (!Native.GetCursorPos(out p) || PresentationSource.FromVisual(island) == null) return false;
         var local = island.PointFromScreen(new Point(p.X, p.Y));
-        const double slack = 10;
-        if (local.X >= -slack && local.Y >= -Gap - slack && local.X <= island.ActualWidth + slack && local.Y <= island.ActualHeight + slack) return true;
+        // CreatorHUD: hover counts right up to the screen edge above the island, but not past its sides or bottom.
+        if (local.X >= 0 && local.Y >= -Gap - 10 && local.X <= island.ActualWidth && local.Y <= island.ActualHeight) return true;
         if (hitStrip.Visibility != Visibility.Visible) return false;
         local = hitStrip.PointFromScreen(new Point(p.X, p.Y));
         return local.X >= 0 && local.Y >= 0 && local.X <= hitStrip.ActualWidth && local.Y <= hitStrip.ActualHeight;

@@ -27,7 +27,7 @@ It's a fork of [WinUltra](https://github.com/Gxmi2006/WinUltra) by **Gamindu Sas
 
 <img src="docs/images/pill-render.png" width="460" alt="The resting pill with music playing and the render bubble at 21%">
 
-**Resting pill.** When something is live (music, a timer, a render, charging), the line becomes a pill of dark tinted glass with a soft glow taken from the album art. With nothing going on, it's a solid dark grey line. Your mouse only has to get close to it.
+**Resting pill.** When something is live (music, a timer, a render, charging), the line becomes a pill of dark tinted glass with a soft glow taken from the album art. With nothing going on, it's a solid dark grey line. Push your mouse to the top edge of the screen above it and it opens. Passing just below or beside it doesn't.
 
 **Music vs videos.** When music is playing (Spotify, Apple Music, YouTube Music and the like), the resting island shows the album art and a little audio visualizer. Videos (YouTube, Instagram, Netflix...) leave it resting as a thin line. Hover and the Media tab still has their controls.
 
@@ -121,6 +121,7 @@ It compiles `CreatorHUD.exe` with the C# compiler that ships with Windows (.NET 
 - Fixed: the island could flash ghost copies of itself for a single frame while opening or closing. It's back on the steady window type.
 - The resting music pill and visualizer only show for music (Spotify, Apple Music, YouTube Music...). YouTube, Instagram and other videos leave the island resting; their controls are still in the Media tab.
 - Clipboard and shelf last for the whole session, pinned items included: no 30-item limit, and shelf files stay after you drag them out. They clear when the PC restarts, when you quit from the tray, or with Clear. Crash-safe saving with a backup copy.
+- The hover area only reaches up to the screen edge above the island, not out to its sides or below, so it no longer opens when you're just passing by.
 - The Shelf tab's drop card and the Clipboard list are ready the moment you open them, instead of popping in a moment later.
 - Shelf has a **Clear unpinned** button. Long clipboard lists load in batches for smooth scrolling.
 - New **Blender render progress** toggle in Settings and the tray menu.
